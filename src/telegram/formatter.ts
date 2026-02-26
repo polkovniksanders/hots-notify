@@ -14,6 +14,15 @@ export function getThumbnailUrl(stream: TwitchStream): string {
     .replace('{height}', '720');
 }
 
+export function formatStreamEndedMessage(stream: TwitchStream): string {
+  const url = `https://twitch.tv/${stream.user_login}`;
+  return [
+    `🔴 <b>Стрим завершён</b>`,
+    `👤 ${stream.user_name}`,
+    `🔗 ${url}`,
+  ].join('\n');
+}
+
 export function formatStreamMessage(stream: TwitchStream): string {
   const url = `https://twitch.tv/${stream.user_login}`;
   const viewers = stream.viewer_count.toLocaleString('ru-RU');

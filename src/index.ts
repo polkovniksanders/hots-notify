@@ -3,7 +3,7 @@ import { getGameIdByName } from './twitch/games';
 import { fetchRussianStreams } from './twitch/streams';
 import { getNewStreams, removeEndedStreams } from './tracker';
 import { sendStreamNotification } from './telegram/bot';
-import { formatStreamMessage } from './telegram/formatter';
+import { formatStreamMessage, formatStreamEndedMessage } from './telegram/formatter';
 
 function log(message: string): void {
   console.log(`[${new Date().toISOString()}] ${message}`);
@@ -16,7 +16,12 @@ async function poll(): Promise<void> {
     const streams = await fetchRussianStreams(gameId);
     const activeIds = new Set(streams.map((s) => s.id));
 
-    removeEndedStreams(activeIds);
+    const endedStreams = removeEndedStreams(activeIds);
+    for (const stream of endedStreams) {
+      const message = formatStreamEndedMessage(stream);
+      await sendStreamNotification(stream, message);
+      log(`Stream ended: ${stream.user_name}`);
+    }
 
     const newStreams = getNewStreams(streams);
 

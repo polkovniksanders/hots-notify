@@ -1,18 +1,22 @@
-const seenStreamIds = new Set<string>();
+import { TwitchStream } from './twitch/streams';
 
-export function getNewStreams<T extends { id: string }>(streams: T[]): T[] {
-  const newStreams = streams.filter((s) => !seenStreamIds.has(s.id));
-  for (const stream of newStreams) {
-    seenStreamIds.add(stream.id);
+const activeStreams = new Map<string, TwitchStream>();
+
+export function getNewStreams(streams: TwitchStream[]): TwitchStream[] {
+  const newStreams = streams.filter((s) => !activeStreams.has(s.id));
+  for (const stream of streams) {
+    activeStreams.set(stream.id, stream);
   }
   return newStreams;
 }
 
-// Удаляем завершившиеся стримы, чтобы уведомить повторно если стример зайдёт снова
-export function removeEndedStreams(activeIds: Set<string>): void {
-  for (const id of seenStreamIds) {
-    if (!activeIds.has(id)) {
-      seenStreamIds.delete(id);
+export function removeEndedStreams(currentIds: Set<string>): TwitchStream[] {
+  const ended: TwitchStream[] = [];
+  for (const [id, stream] of activeStreams) {
+    if (!currentIds.has(id)) {
+      ended.push(stream);
+      activeStreams.delete(id);
     }
   }
+  return ended;
 }
