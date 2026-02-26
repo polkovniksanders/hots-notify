@@ -1,0 +1,24 @@
+#!/bin/bash
+# Обновление бота на VPS после изменений в репозитории
+# Запускать из директории /var/www/hots-notify
+
+set -e
+
+APP_DIR="/var/www/hots-notify"
+
+cd "$APP_DIR"
+
+echo "==> Pulling latest changes..."
+git pull
+
+echo "==> Installing dependencies..."
+npm install
+
+echo "==> Building..."
+npm run build
+
+echo "==> Restarting bot..."
+pm2 restart hots-notify
+
+echo "==> Done! Bot status:"
+pm2 status hots-notify
