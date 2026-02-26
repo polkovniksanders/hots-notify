@@ -5,7 +5,7 @@
 set -e
 
 REPO_URL=$1
-APP_DIR="/var/www/hots-notify"
+APP_DIR="$HOME/hots_notify"
 
 if [ -z "$REPO_URL" ]; then
   echo "Usage: bash vps-setup.sh <git-repo-url>"

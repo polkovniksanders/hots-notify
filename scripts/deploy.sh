@@ -4,7 +4,7 @@
 
 set -e
 
-APP_DIR="/var/www/hots-notify"
+APP_DIR="$HOME/hots_notify"
 
 cd "$APP_DIR"
 
