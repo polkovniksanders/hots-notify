@@ -12,6 +12,7 @@ export interface TwitchStream {
   started_at: string;
   thumbnail_url: string;
   tags: string[];
+  is_mature: boolean;
 }
 
 export async function fetchRussianStreams(gameId: string): Promise<TwitchStream[]> {

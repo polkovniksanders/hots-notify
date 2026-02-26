@@ -20,10 +20,9 @@ export function formatStreamMessage(stream: TwitchStream): string {
   const duration = formatDuration(stream.started_at);
 
   const lines = [
-    `🎮 <b>${stream.game_name}</b>`,
+    `📺 <b>${stream.title}</b>`,
+    `👤 ${stream.user_name}`,
     ``,
-    `👤 <b>${stream.user_name}</b>`,
-    `📺 ${stream.title}`,
     `⏱ В эфире: ${duration}`,
     `👥 ${viewers} зрителей`,
     `🔗 ${url}`,
@@ -31,6 +30,10 @@ export function formatStreamMessage(stream: TwitchStream): string {
 
   if (stream.tags.length > 0) {
     lines.push(``, `🏷 ${stream.tags.slice(0, 5).join(' · ')}`);
+  }
+
+  if (stream.is_mature) {
+    lines.push(`🔞 Трансляция для взрослых`);
   }
 
   return lines.join('\n');
