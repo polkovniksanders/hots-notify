@@ -16,6 +16,9 @@ git merge --ff-only origin/master
 echo "==> Installing dependencies..."
 npm install
 
+echo "==> Generating Prisma client..."
+npx prisma generate
+
 echo "==> Applying database migrations..."
 npx prisma migrate deploy
 

@@ -41,11 +41,14 @@ echo ""
 echo "==> Installing dependencies..."
 npm install
 
-echo "==> Building..."
-npm run build
+echo "==> Generating Prisma client..."
+npx prisma generate
 
 echo "==> Applying database migrations..."
 npx prisma migrate deploy
+
+echo "==> Building..."
+npm run build
 
 echo "==> Setup complete!"
 echo ""
