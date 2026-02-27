@@ -5,6 +5,7 @@ import { getNewStreams, removeEndedStreams, getActiveCount } from './tracker';
 import { bot, sendStreamNotification, sendTextMessage, setActiveCountGetter } from './telegram/bot';
 import { formatStreamMessage, formatStreamEndedMessage, formatDigestMessage } from './telegram/formatter';
 import { recordStream, getDailyStats, shouldSendDigest, resetDailyStats } from './stats';
+import { getProfile } from './db/profile';
 
 function log(message: string): void {
   console.log(`[${new Date().toISOString()}] ${message}`);
@@ -28,7 +29,8 @@ async function poll(): Promise<void> {
     // Уведомления о новых стримах
     const newStreams = getNewStreams(streams);
     for (const stream of newStreams) {
-      const caption = formatStreamMessage(stream);
+      const profile = await getProfile(stream.user_login);
+      const caption = formatStreamMessage(stream, profile);
       await sendStreamNotification(stream, caption);
       log(`Notified: ${stream.user_name} (${stream.viewer_count} viewers)`);
     }

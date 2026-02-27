@@ -44,9 +44,12 @@ npm install
 echo "==> Building..."
 npm run build
 
+echo "==> Applying database migrations..."
+npx prisma migrate deploy
+
 echo "==> Setup complete!"
 echo ""
 echo "Next steps:"
-echo "  1. nano $APP_DIR/.env       — fill in tokens"
+echo "  1. nano $APP_DIR/.env       — fill in tokens (BOT_TOKEN, CHANNEL_ID, TWITCH_*, DATABASE_URL, ADMIN_ID)"
 echo "  2. cd $APP_DIR && pm2 start dist/index.js --name hots-notify"
 echo "  3. pm2 save && pm2 startup  — enable autostart"

@@ -1,5 +1,32 @@
 import { TwitchStream } from '../twitch/streams';
 import { StreamStat } from '../stats';
+import { StreamerProfile } from '../db/profile';
+
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function profileLines(profile: StreamerProfile | null | undefined): string[] {
+  if (!profile) return [];
+
+  const lines: string[] = [];
+
+  if (profile.description) {
+    lines.push(``, `📝 ${escapeHtml(profile.description)}`);
+  }
+
+  const socials: string[] = [];
+  if (profile.discord) socials.push(`💬 <a href="${escapeHtml(profile.discord)}">Discord</a>`);
+  if (profile.telegram) socials.push(`📱 <a href="${escapeHtml(profile.telegram)}">Telegram</a>`);
+  if (profile.youtube) socials.push(`▶️ <a href="${escapeHtml(profile.youtube)}">YouTube</a>`);
+  if (profile.donate) socials.push(`💸 <a href="${escapeHtml(profile.donate)}">Донат</a>`);
+
+  if (socials.length > 0) {
+    lines.push(``, ...socials);
+  }
+
+  return lines;
+}
 
 function formatDuration(startedAt: string): string {
   const seconds = Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000);
@@ -15,14 +42,17 @@ export function getThumbnailUrl(stream: TwitchStream): string {
     .replace('{height}', '720');
 }
 
-export function formatStreamMessage(stream: TwitchStream): string {
+export function formatStreamMessage(
+  stream: TwitchStream,
+  profile?: StreamerProfile | null,
+): string {
   const url = `https://twitch.tv/${stream.user_login}`;
   const viewers = stream.viewer_count.toLocaleString('ru-RU');
   const duration = formatDuration(stream.started_at);
 
   const lines = [
-    `📺 <b>${stream.title}</b>`,
-    `👤 ${stream.user_name}`,
+    `📺 <b>${escapeHtml(stream.title)}</b>`,
+    `👤 ${escapeHtml(stream.user_name)}`,
     ``,
     `⏱ В эфире: ${duration}`,
     `👥 ${viewers} зрителей`,
@@ -30,12 +60,14 @@ export function formatStreamMessage(stream: TwitchStream): string {
   ];
 
   if (stream.tags.length > 0) {
-    lines.push(``, `🏷 ${stream.tags.slice(0, 5).join(' · ')}`);
+    lines.push(``, `🏷 ${stream.tags.slice(0, 5).map(escapeHtml).join(' · ')}`);
   }
 
   if (stream.is_mature) {
     lines.push(`🔞 Трансляция для взрослых`);
   }
+
+  lines.push(...profileLines(profile));
 
   lines.push(``, `#heroesofthestorm`);
 
