@@ -26,6 +26,7 @@ export function formatStreamMessage(stream: TwitchStream): string {
     ``,
     `⏱ В эфире: ${duration}`,
     `👥 ${viewers} зрителей`,
+    `🔗 ${url}`,
   ];
 
   if (stream.tags.length > 0) {
