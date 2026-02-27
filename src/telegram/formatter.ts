@@ -1,4 +1,5 @@
 import { TwitchStream } from '../twitch/streams';
+import { StreamStat } from '../stats';
 
 function formatDuration(startedAt: string): string {
   const seconds = Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000);
@@ -14,15 +15,6 @@ export function getThumbnailUrl(stream: TwitchStream): string {
     .replace('{height}', '720');
 }
 
-export function formatStreamEndedMessage(stream: TwitchStream): string {
-  const url = `https://twitch.tv/${stream.user_login}`;
-  return [
-    `🔴 <b>Стрим завершён</b>`,
-    `👤 ${stream.user_name}`,
-    `🔗 ${url}`,
-  ].join('\n');
-}
-
 export function formatStreamMessage(stream: TwitchStream): string {
   const url = `https://twitch.tv/${stream.user_login}`;
   const viewers = stream.viewer_count.toLocaleString('ru-RU');
@@ -34,7 +26,6 @@ export function formatStreamMessage(stream: TwitchStream): string {
     ``,
     `⏱ В эфире: ${duration}`,
     `👥 ${viewers} зрителей`,
-    `🔗 ${url}`,
   ];
 
   if (stream.tags.length > 0) {
@@ -44,6 +35,61 @@ export function formatStreamMessage(stream: TwitchStream): string {
   if (stream.is_mature) {
     lines.push(`🔞 Трансляция для взрослых`);
   }
+
+  return lines.join('\n');
+}
+
+export function formatStreamEndedMessage(stream: TwitchStream): string {
+  const url = `https://twitch.tv/${stream.user_login}`;
+  return [
+    `🔴 <b>Стрим завершён</b>`,
+    `👤 ${stream.user_name}`,
+    `🔗 ${url}`,
+  ].join('\n');
+}
+
+export function formatStatsMessage(count: number, top: StreamStat[], activeCount: number): string {
+  const lines = [
+    `📊 <b>Статистика за сегодня</b>`,
+    ``,
+    `🎮 Стримеров замечено: ${count}`,
+    `📡 Сейчас в эфире: ${activeCount}`,
+  ];
+
+  if (top.length > 0) {
+    lines.push(``, `🏆 <b>Топ по зрителям:</b>`);
+    top.forEach((s, i) => {
+      const viewers = s.peakViewers.toLocaleString('ru-RU');
+      lines.push(`${i + 1}. ${s.user_name} — ${viewers} зрит.`);
+    });
+  }
+
+  return lines.join('\n');
+}
+
+export function formatDigestMessage(count: number, top: StreamStat[]): string {
+  const today = new Date().toLocaleDateString('ru-RU', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'Europe/Moscow',
+  });
+
+  const lines = [
+    `📊 <b>Дайджест за ${today}</b>`,
+    ``,
+    `Сегодня в эфире побывали ${count} стримеров`,
+  ];
+
+  if (top.length > 0) {
+    lines.push(``, `🏆 <b>Топ по пиковым зрителям:</b>`);
+    top.forEach((s, i) => {
+      const viewers = s.peakViewers.toLocaleString('ru-RU');
+      lines.push(`${i + 1}. <a href="https://twitch.tv/${s.user_login}">${s.user_name}</a> — ${viewers} зрит.`);
+    });
+  }
+
+  lines.push(``, `#HeroesOfTheStorm #HotS`);
 
   return lines.join('\n');
 }
