@@ -37,6 +37,8 @@ export function formatStreamMessage(stream: TwitchStream): string {
     lines.push(`🔞 Трансляция для взрослых`);
   }
 
+  lines.push(``, `#heroesofthestorm`);
+
   return lines.join('\n');
 }
 
@@ -90,7 +92,7 @@ export function formatDigestMessage(count: number, top: StreamStat[]): string {
     });
   }
 
-  lines.push(``, `#HeroesOfTheStorm #HotS`);
+  lines.push(``, `#HeroesOfTheStorm`);
 
   return lines.join('\n');
 }
