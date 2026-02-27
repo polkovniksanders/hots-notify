@@ -9,7 +9,9 @@ APP_DIR="$HOME/hots_notify"
 cd "$APP_DIR"
 
 echo "==> Pulling latest changes..."
-git pull
+git fetch origin
+git checkout -- package-lock.json 2>/dev/null || true
+git merge --ff-only origin/master
 
 echo "==> Installing dependencies..."
 npm install
