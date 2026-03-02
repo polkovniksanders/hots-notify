@@ -1,4 +1,5 @@
 import { TwitchStream } from '../twitch/streams';
+import { TwitchClip } from '../twitch/clips';
 import { StreamStat } from '../stats';
 import { StreamerProfile } from '../db/profile';
 
@@ -107,7 +108,13 @@ export function formatStatsMessage(count: number, top: StreamStat[], activeCount
   return lines.join('\n');
 }
 
-export function formatDigestMessage(count: number, top: StreamStat[], date: string, avgPeakViewers: number): string {
+export function formatDigestMessage(
+  count: number,
+  top: StreamStat[],
+  date: string,
+  avgPeakViewers: number,
+  clips: TwitchClip[] = [],
+): string {
   const lines = [
     `📊 <b>Дайджест за ${date}</b>`,
     ``,
@@ -116,14 +123,22 @@ export function formatDigestMessage(count: number, top: StreamStat[], date: stri
   ];
 
   if (top.length > 0) {
-    lines.push(``, `🏆 <b>Топ по пиковым зрителям:</b>`);
+    lines.push(``, `🏆 <b>Топ стримеров по зрителям:</b>`);
     top.forEach((s, i) => {
       const viewers = s.peakViewers.toLocaleString('ru-RU');
       lines.push(`${i + 1}. <a href="https://twitch.tv/${s.user_login}">${s.user_name}</a> — ${viewers} зрит.`);
     });
   }
 
-  lines.push(``, `<i>Зрители — максимум, зафиксированный ботом за день (данные Twitch API)</i>`);
+  if (clips.length > 0) {
+    lines.push(``, `🎬 <b>Топ клипов дня:</b>`);
+    clips.forEach((c, i) => {
+      const views = c.view_count.toLocaleString('ru-RU');
+      lines.push(`${i + 1}. <a href="${c.url}">${escapeHtml(c.title)}</a> — ${escapeHtml(c.broadcaster_name)}, ${views} просм.`);
+    });
+  }
+
+  lines.push(``, `<i>Зрители — пик за день по данным Twitch API</i>`);
   lines.push(``, `#HeroesOfTheStorm`);
 
   return lines.join('\n');

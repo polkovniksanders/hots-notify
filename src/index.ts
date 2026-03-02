@@ -1,6 +1,7 @@
 import { config } from './config';
 import { getGameIdByName } from './twitch/games';
 import { fetchRussianStreams } from './twitch/streams';
+import { fetchTopClipsToday } from './twitch/clips';
 import { getNewStreams, removeEndedStreams, getActiveCount } from './tracker';
 import { bot, sendStreamNotification, sendTextMessage, setActiveCountGetter } from './telegram/bot';
 import { formatStreamMessage, formatStreamEndedMessage, formatDigestMessage } from './telegram/formatter';
@@ -48,9 +49,10 @@ async function poll(): Promise<void> {
     if (shouldSendDigest(config.digestHour)) {
       const { count, top, date, avgPeakViewers } = getDailyStats();
       if (count > 0) {
-        const message = formatDigestMessage(count, top, date, avgPeakViewers);
+        const clips = await fetchTopClipsToday(gameId).catch(() => []);
+        const message = formatDigestMessage(count, top, date, avgPeakViewers, clips);
         await sendTextMessage(message);
-        log(`Digest sent: ${count} streamers`);
+        log(`Digest sent: ${count} streamers, ${clips.length} clips`);
       }
       resetDailyStats();
     }

@@ -3,6 +3,7 @@ import { config } from '../config';
 import { TwitchStream } from '../twitch/streams';
 import { getThumbnailUrl, formatStatsMessage } from './formatter';
 import { getDailyStats } from '../stats';
+import { generateWelcome } from '../ai/greeter';
 import {
   getProfile,
   setProfileField,
@@ -25,12 +26,40 @@ function isAdmin(ctx: { chat?: { type: string }; from?: { id: number } }): boole
   );
 }
 
+// Защита от спама: игнорируем все ЛС от не-администраторов
+bot.on('message', async (ctx, next) => {
+  if (ctx.chat?.type === 'private' && !isAdmin(ctx)) return;
+  return next();
+});
+
+// Кулдаун /stats: не чаще одного раза в 30 секунд на чат
+const statsCooldowns = new Map<number, number>();
+const STATS_COOLDOWN_MS = 30_000;
+
 // Команда /stats — отвечает в любом чате где есть бот
 bot.command('stats', async (ctx) => {
-  // Получаем количество активных стримов через трекер — передаём снаружи
+  const chatId = ctx.chat.id;
+  const now = Date.now();
+  if (now - (statsCooldowns.get(chatId) ?? 0) < STATS_COOLDOWN_MS) return;
+  statsCooldowns.set(chatId, now);
+
   const { count, top } = getDailyStats();
   const message = formatStatsMessage(count, top, getActiveCount());
   await ctx.reply(message, { parse_mode: 'HTML' });
+});
+
+// Приветствие новых участников через AI
+// Пропускаем: ботов, массовые вступления (> 3 за раз — вероятный спам)
+bot.on('message:new_chat_members', async (ctx) => {
+  const newMembers = ctx.message.new_chat_members.filter((m) => !m.is_bot);
+  if (newMembers.length === 0 || newMembers.length > 3) return;
+
+  for (const member of newMembers) {
+    const welcome = await generateWelcome(member.first_name);
+    if (welcome) {
+      await ctx.reply(welcome);
+    }
+  }
 });
 
 // /set <username> <field> <value>
