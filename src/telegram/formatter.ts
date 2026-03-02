@@ -60,7 +60,12 @@ export function formatStreamMessage(
   ];
 
   if (stream.tags.length > 0) {
-    lines.push(``, `🏷 ${stream.tags.slice(0, 5).map(escapeHtml).join(' · ')}`);
+    const hashtags = stream.tags
+      .slice(0, 5)
+      .map((tag) => '#' + tag.replace(/[^\p{L}\p{N}_]/gu, ''))
+      .filter((tag) => tag.length > 1)
+      .join(' ');
+    if (hashtags) lines.push(``, `🏷 ${hashtags}`);
   }
 
   if (stream.is_mature) {
@@ -102,18 +107,12 @@ export function formatStatsMessage(count: number, top: StreamStat[], activeCount
   return lines.join('\n');
 }
 
-export function formatDigestMessage(count: number, top: StreamStat[]): string {
-  const today = new Date().toLocaleDateString('ru-RU', {
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
-    timeZone: 'Europe/Moscow',
-  });
-
+export function formatDigestMessage(count: number, top: StreamStat[], date: string, avgPeakViewers: number): string {
   const lines = [
-    `📊 <b>Дайджест за ${today}</b>`,
+    `📊 <b>Дайджест за ${date}</b>`,
     ``,
-    `Сегодня в эфире побывали ${count} стримеров`,
+    `🎮 Стримеров за день: ${count}`,
+    `👥 Средний пик зрителей: ${avgPeakViewers.toLocaleString('ru-RU')}`,
   ];
 
   if (top.length > 0) {
@@ -124,6 +123,7 @@ export function formatDigestMessage(count: number, top: StreamStat[]): string {
     });
   }
 
+  lines.push(``, `<i>Зрители — максимум, зафиксированный ботом за день (данные Twitch API)</i>`);
   lines.push(``, `#HeroesOfTheStorm`);
 
   return lines.join('\n');

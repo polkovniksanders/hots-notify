@@ -46,9 +46,9 @@ async function poll(): Promise<void> {
 
     // Проверяем нужно ли отправить дайджест
     if (shouldSendDigest(config.digestHour)) {
-      const { count, top } = getDailyStats();
+      const { count, top, date, avgPeakViewers } = getDailyStats();
       if (count > 0) {
-        const message = formatDigestMessage(count, top);
+        const message = formatDigestMessage(count, top, date, avgPeakViewers);
         await sendTextMessage(message);
         log(`Digest sent: ${count} streamers`);
       }
