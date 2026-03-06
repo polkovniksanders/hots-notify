@@ -17,3 +17,25 @@ model StreamerProfile {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 }
+
+/// Tracks currently-live streams so the bot survives restarts without
+/// sending duplicate "new stream" notifications.
+model ActiveStream {
+  id        String   @id        // Twitch stream ID
+  userLogin String
+  userName  String
+  startedAt String             // ISO 8601 string from Twitch API
+  seenAt    DateTime @default(now())
+}
+
+/// Personal subscriptions: a Telegram user subscribes to a Twitch streamer
+/// and receives a DM when that streamer goes live.
+model Subscription {
+  id            Int      @id @default(autoincrement())
+  userId        BigInt
+  streamerLogin String
+  createdAt     DateTime @default(now())
+
+  @@unique([userId, streamerLogin])
+  @@index([streamerLogin])
+}

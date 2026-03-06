@@ -80,12 +80,34 @@ export function formatStreamMessage(
   return lines.join('\n');
 }
 
-export function formatStreamEndedMessage(stream: TwitchStream): string {
-  const url = `https://twitch.tv/${stream.user_login}`;
+/**
+ * Formats an "ended" notification for one or more streams.
+ * Single stream: shows name + duration.
+ * Multiple streams: compact one-liner to avoid feed spam.
+ */
+export function formatStreamsEndedMessage(streams: TwitchStream[]): string {
+  if (streams.length === 0) return '';
+
+  if (streams.length === 1) {
+    const stream = streams[0];
+    const duration = formatDuration(stream.started_at);
+    return [
+      `⭕ <b>Стрим завершён</b>`,
+      `👤 ${escapeHtml(stream.user_name)}`,
+      `⏱ Был в эфире: ${duration}`,
+    ].join('\n');
+  }
+
+  const names = streams.map((s) => escapeHtml(s.user_name)).join(', ');
+  return `⭕ Завершили стрим: ${names}`;
+}
+
+export function formatSubscriberNotification(stream: TwitchStream): string {
   return [
-    `🔴 <b>Стрим завершён</b>`,
-    `👤 ${stream.user_name}`,
-    `🔗 ${url}`,
+    `🔴 <b>${escapeHtml(stream.user_name)}</b> начал стрим!`,
+    `📺 ${escapeHtml(stream.title)}`,
+    ``,
+    `https://twitch.tv/${stream.user_login}`,
   ].join('\n');
 }
 

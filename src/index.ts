@@ -1,15 +1,44 @@
 import { config } from './config';
 import { getGameIdByName } from './twitch/games';
-import { fetchRussianStreams } from './twitch/streams';
+import { fetchRussianStreams, TwitchStream } from './twitch/streams';
 import { fetchTopClipsToday } from './twitch/clips';
-import { getNewStreams, removeEndedStreams, getActiveCount } from './tracker';
+import { initTracker, getNewStreams, removeEndedStreams, getActiveCount } from './tracker';
 import { bot, sendStreamNotification, sendTextMessage, setActiveCountGetter } from './telegram/bot';
-import { formatStreamMessage, formatStreamEndedMessage, formatDigestMessage } from './telegram/formatter';
+import { formatStreamMessage, formatStreamsEndedMessage, formatDigestMessage, formatSubscriberNotification } from './telegram/formatter';
 import { recordStream, getDailyStats, shouldSendDigest, resetDailyStats } from './stats';
 import { getProfile } from './db/profile';
+import { getSubscribers, removeAllSubscriptions } from './db/subscription';
+import { GrammyError } from 'grammy';
 
 function log(message: string): void {
   console.log(`[${new Date().toISOString()}] ${message}`);
+}
+
+async function notifySubscribers(stream: TwitchStream): Promise<void> {
+  const subscribers = await getSubscribers(stream.user_login);
+  if (subscribers.length === 0) return;
+
+  const message = formatSubscriberNotification(stream);
+
+  await Promise.allSettled(
+    subscribers.map(async (userId) => {
+      try {
+        await bot.api.sendMessage(Number(userId), message, { parse_mode: 'HTML' });
+      } catch (err) {
+        const isBlocked =
+          err instanceof GrammyError &&
+          (err.description.includes('bot was blocked by the user') ||
+            err.description.includes('user is deactivated'));
+
+        if (isBlocked) {
+          log(`Subscriber ${userId} blocked the bot — removing subscriptions`);
+          await removeAllSubscriptions(userId);
+        } else {
+          log(`Failed to notify ${userId}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    }),
+  );
 }
 
 let gameId: string;
@@ -19,20 +48,21 @@ async function poll(): Promise<void> {
     const streams = await fetchRussianStreams(gameId);
     const activeIds = new Set(streams.map((s) => s.id));
 
-    // Уведомления об окончании стримов
-    const endedStreams = removeEndedStreams(activeIds);
-    for (const stream of endedStreams) {
-      const message = formatStreamEndedMessage(stream);
+    // Уведомления об окончании стримов — одно сообщение на все завершённые
+    const endedStreams = await removeEndedStreams(activeIds);
+    if (endedStreams.length > 0) {
+      const message = formatStreamsEndedMessage(endedStreams);
       await sendTextMessage(message);
-      log(`Stream ended: ${stream.user_name}`);
+      log(`Streams ended: ${endedStreams.map((s) => s.user_name).join(', ')}`);
     }
 
     // Уведомления о новых стримах
-    const newStreams = getNewStreams(streams);
+    const newStreams = await getNewStreams(streams);
     for (const stream of newStreams) {
       const profile = await getProfile(stream.user_login);
       const caption = formatStreamMessage(stream, profile);
       await sendStreamNotification(stream, caption);
+      await notifySubscribers(stream);
       log(`Notified: ${stream.user_name} (${stream.viewer_count} viewers)`);
     }
 
@@ -69,6 +99,10 @@ async function main(): Promise<void> {
   log(`Game ID resolved: ${gameId}`);
   log(`Polling interval: ${config.pollingInterval / 1000}s`);
   log(`Digest hour (UTC): ${config.digestHour}:00`);
+
+  // Восстанавливаем состояние активных стримов из БД (защита от дублей при перезапуске)
+  await initTracker();
+  log('Tracker state restored from DB');
 
   // Передаём функцию получения активных стримов в бот для /stats
   setActiveCountGetter(getActiveCount);

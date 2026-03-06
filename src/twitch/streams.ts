@@ -15,20 +15,52 @@ export interface TwitchStream {
   is_mature: boolean;
 }
 
-export async function fetchRussianStreams(gameId: string): Promise<TwitchStream[]> {
-  const token = await getAccessToken();
+const CYRILLIC_RE = /[а-яёА-ЯЁ]/;
+const RU_TAGS = new Set(['русский', 'russian', 'ru', 'рус']);
 
+/**
+ * Returns true if the stream's title contains Cyrillic characters
+ * or tags include a Russian-language marker.
+ * Used to catch streamers who set their channel language incorrectly.
+ */
+export function isRussianByContent(stream: TwitchStream): boolean {
+  if (CYRILLIC_RE.test(stream.title)) return true;
+  return stream.tags.some((tag) => RU_TAGS.has(tag.toLowerCase()));
+}
+
+interface StreamsRequestParams {
+  language?: string;
+}
+
+async function fetchStreams(
+  gameId: string,
+  params: StreamsRequestParams,
+): Promise<TwitchStream[]> {
+  const token = await getAccessToken();
   const response = await axios.get('https://api.twitch.tv/helix/streams', {
     headers: {
       'Client-ID': config.twitchClientId,
       Authorization: `Bearer ${token}`,
     },
-    params: {
-      game_id: gameId,
-      language: 'ru',
-      first: 100,
-    },
+    params: { game_id: gameId, first: 100, ...params },
   });
-
   return response.data.data as TwitchStream[];
+}
+
+/**
+ * Fetches Russian HotS streams using two strategies:
+ * 1. Official language=ru filter (fast, but misses streamers with wrong language set)
+ * 2. All streams filtered by Cyrillic title or Russian tags (catches the rest)
+ * Results are deduplicated by stream id.
+ */
+export async function fetchRussianStreams(gameId: string): Promise<TwitchStream[]> {
+  const [ruStreams, allStreams] = await Promise.all([
+    fetchStreams(gameId, { language: 'ru' }),
+    fetchStreams(gameId, {}),
+  ]);
+
+  const ruIds = new Set(ruStreams.map((s) => s.id));
+  const additional = allStreams.filter((s) => !ruIds.has(s.id) && isRussianByContent(s));
+
+  return [...ruStreams, ...additional];
 }

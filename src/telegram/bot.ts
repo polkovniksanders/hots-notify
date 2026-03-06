@@ -14,6 +14,7 @@ import {
   isValidHttpUrl,
   PROFILE_FIELDS,
 } from '../db/profile';
+import { registerFollowCommands } from './commands/follow';
 
 export const bot = new Bot(config.botToken);
 
@@ -26,9 +27,10 @@ function isAdmin(ctx: { chat?: { type: string }; from?: { id: number } }): boole
   );
 }
 
-// Защита от спама: игнорируем все ЛС от не-администраторов
+// Защита от спама: в ЛС разрешаем только команды (начинаются с '/').
+// Администратор проходит без ограничений.
 bot.on('message', async (ctx, next) => {
-  if (ctx.chat?.type === 'private' && !isAdmin(ctx)) return;
+  if (ctx.chat?.type === 'private' && !isAdmin(ctx) && !ctx.message.text?.startsWith('/')) return;
   return next();
 });
 
@@ -173,6 +175,9 @@ bot.command('delprofile', async (ctx) => {
   }
 });
 
+// Регистрируем команды подписки (/follow, /unfollow, /follows)
+registerFollowCommands(bot);
+
 // Callback для получения актуального числа активных стримов
 let getActiveCount: () => number = () => 0;
 export function setActiveCountGetter(fn: () => number): void {
@@ -182,11 +187,10 @@ export function setActiveCountGetter(fn: () => number): void {
 export async function sendStreamNotification(stream: TwitchStream, caption: string): Promise<void> {
   const thumbnailUrl = getThumbnailUrl(stream);
   const url = `https://twitch.tv/${stream.user_login}`;
-  const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(`Смотрю стрим по Heroes of the Storm: ${stream.title}`)}`;
 
   const keyboard = new InlineKeyboard()
     .url('▶️ Смотреть', url)
-    .url('📢 Поделиться', shareUrl);
+    .text('🔔 Подписаться', `subscribe:${stream.user_login}`);
 
   try {
     await bot.api.sendPhoto(config.channelId, thumbnailUrl, {

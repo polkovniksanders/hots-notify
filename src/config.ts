@@ -17,6 +17,8 @@ export const config = {
   digestHour: parseInt(process.env.DIGEST_HOUR ?? '21', 10),
   // Telegram user ID администратора (строка, чтобы точно совпадало с ctx.from.id)
   adminId: process.env.ADMIN_ID ?? '',
+  // Username бота без @, нужен для deep links (t.me/<botName>?start=...)
+  botName: process.env.BOT_NAME ?? '',
   // gptTunnel API key для AI-приветствий (опционально)
   gptunnelApiKey: process.env.GPTUNNEL_API_KEY ?? '',
   gptunnelBaseUrl: process.env.GPTUNNEL_BASE_URL ?? 'https://api.gpttunnel.com/v1',
