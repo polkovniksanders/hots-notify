@@ -1,24 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import type { TwitchStream } from '../src/twitch/streams';
-
-// ---------------------------------------------------------------------------
-// Prisma mock
-// ---------------------------------------------------------------------------
-const mockActiveStream = {
-  findMany: vi.fn(),
-  upsert: vi.fn(),
-  deleteMany: vi.fn(),
-};
-
-vi.mock('../src/db/client', () => ({
-  getPrisma: () => ({ activeStream: mockActiveStream }),
-}));
-
 import { initTracker, getNewStreams, removeEndedStreams, getActiveCount } from '../src/tracker';
 
 function makeStream(overrides: Partial<TwitchStream> = {}): TwitchStream {
   return {
-    id: '1',
+    id: 'stream-id-1',
     user_login: 'testuser',
     user_name: 'TestUser',
     game_name: 'Heroes of the Storm',
@@ -32,196 +18,103 @@ function makeStream(overrides: Partial<TwitchStream> = {}): TwitchStream {
   };
 }
 
-// Resets module-level Map state before each group via initTracker with empty DB.
-async function resetTracker() {
-  mockActiveStream.findMany.mockResolvedValue([]);
-  await initTracker();
-  mockActiveStream.upsert.mockResolvedValue({});
-  mockActiveStream.deleteMany.mockResolvedValue({ count: 0 });
-}
+beforeEach(() => {
+  initTracker();
+});
 
 // ---------------------------------------------------------------------------
 // initTracker
 // ---------------------------------------------------------------------------
 
 describe('initTracker', () => {
-  beforeEach(() => vi.clearAllMocks());
-
-  it('loads rows from DB into in-memory cache', async () => {
-    mockActiveStream.findMany.mockResolvedValue([
-      { id: '1', userLogin: 'user1', userName: 'User1', startedAt: '2026-03-07T10:00:00Z', seenAt: new Date() },
-      { id: '2', userLogin: 'user2', userName: 'User2', startedAt: '2026-03-07T11:00:00Z', seenAt: new Date() },
-    ]);
-
-    await initTracker();
-
-    expect(getActiveCount()).toBe(2);
-  });
-
-  it('returns false when DB has existing rows (not a fresh deploy)', async () => {
-    mockActiveStream.findMany.mockResolvedValue([
-      { id: '1', userLogin: 'user1', userName: 'User1', startedAt: '', seenAt: new Date() },
-    ]);
-
-    const result = await initTracker();
-
-    expect(result).toBe(false);
-  });
-
-  it('returns true when DB is empty (fresh deploy)', async () => {
-    mockActiveStream.findMany.mockResolvedValue([]);
-
-    const result = await initTracker();
-
-    expect(result).toBe(true);
-  });
-
-  it('does not mark restored streams as new on next getNewStreams call', async () => {
-    mockActiveStream.findMany.mockResolvedValue([
-      { id: '42', userLogin: 'streamer', userName: 'Streamer', startedAt: '2026-03-07T10:00:00Z', seenAt: new Date() },
-    ]);
-    mockActiveStream.upsert.mockResolvedValue({});
-
-    await initTracker();
-
-    const stream = makeStream({ id: '42' });
-    const newStreams = await getNewStreams([stream]);
-
-    expect(newStreams).toHaveLength(0);
-    expect(mockActiveStream.upsert).not.toHaveBeenCalled();
-  });
-
-  it('returns empty cache when DB has no rows', async () => {
-    mockActiveStream.findMany.mockResolvedValue([]);
-    await initTracker();
+  it('clears the in-memory cache', () => {
+    getNewStreams([makeStream()]);
+    initTracker();
     expect(getActiveCount()).toBe(0);
   });
 });
 
 // ---------------------------------------------------------------------------
-// getNewStreams
+// getNewStreams — tracks by user_login, not stream id
 // ---------------------------------------------------------------------------
 
 describe('getNewStreams', () => {
-  beforeEach(async () => {
-    vi.clearAllMocks();
-    await resetTracker();
-  });
-
-  it('returns new streams not seen before', async () => {
-    const result = await getNewStreams([makeStream({ id: '10' })]);
+  it('returns a stream the first time it is seen', () => {
+    const result = getNewStreams([makeStream({ user_login: 'streamer1' })]);
     expect(result).toHaveLength(1);
-    expect(result[0].id).toBe('10');
   });
 
-  it('does not return already-tracked streams', async () => {
-    const stream = makeStream({ id: '10' });
-    await getNewStreams([stream]);
-    const result = await getNewStreams([stream]);
+  it('does not return the same streamer on the next poll', () => {
+    const stream = makeStream({ user_login: 'streamer1' });
+    getNewStreams([stream]);
+    const result = getNewStreams([stream]);
     expect(result).toHaveLength(0);
   });
 
-  it('persists new streams via upsert', async () => {
-    const stream = makeStream({ id: '10' });
-    await getNewStreams([stream]);
-
-    expect(mockActiveStream.upsert).toHaveBeenCalledWith({
-      where: { id: '10' },
-      create: { id: '10', userLogin: 'testuser', userName: 'TestUser', startedAt: '2026-03-07T10:00:00Z' },
-      update: {},
-    });
+  it('treats the same streamer as known even when stream.id changes (Twitch CDN rotation)', () => {
+    getNewStreams([makeStream({ user_login: 'streamer1', id: 'id-old' })]);
+    // Same streamer, new stream ID (Twitch reconnect) — must NOT trigger a notification
+    const result = getNewStreams([makeStream({ user_login: 'streamer1', id: 'id-new' })]);
+    expect(result).toHaveLength(0);
   });
 
-  it('does not call upsert when there are no new streams', async () => {
-    const stream = makeStream({ id: '10' });
-    await getNewStreams([stream]);
-    vi.clearAllMocks();
-    await getNewStreams([stream]);
-
-    expect(mockActiveStream.upsert).not.toHaveBeenCalled();
-  });
-
-  it('updates getActiveCount with all current streams', async () => {
-    await getNewStreams([makeStream({ id: '1' }), makeStream({ id: '2' }), makeStream({ id: '3' })]);
+  it('adds all current streams to the active cache', () => {
+    getNewStreams([
+      makeStream({ user_login: 'a' }),
+      makeStream({ user_login: 'b' }),
+      makeStream({ user_login: 'c' }),
+    ]);
     expect(getActiveCount()).toBe(3);
   });
 });
 
 // ---------------------------------------------------------------------------
-// removeEndedStreams — grace period: stream must be absent for GRACE_POLLS+1
-// polls (i.e. 2 calls) before being declared ended.
+// removeEndedStreams — grace period: absent for GRACE_POLLS+1 polls
 // ---------------------------------------------------------------------------
 
 describe('removeEndedStreams', () => {
-  beforeEach(async () => {
-    vi.clearAllMocks();
-    await resetTracker();
-  });
-
-  it('does NOT declare a stream ended after just one missing poll (grace period)', async () => {
-    await getNewStreams([makeStream({ id: '1' }), makeStream({ id: '2' })]);
-
-    // Poll where id=2 is absent — first miss, should not be declared ended yet
-    const ended = await removeEndedStreams(new Set(['1']));
+  it('does NOT declare a streamer ended after one missing poll (grace period)', () => {
+    getNewStreams([makeStream({ user_login: 'a' }), makeStream({ user_login: 'b' })]);
+    const ended = removeEndedStreams(new Set(['a']));
     expect(ended).toHaveLength(0);
   });
 
-  it('declares a stream ended after GRACE_POLLS+1 consecutive missing polls', async () => {
-    const s1 = makeStream({ id: '1' });
-    const s2 = makeStream({ id: '2' });
-    await getNewStreams([s1, s2]);
-
-    // First absence — grace period
-    await removeEndedStreams(new Set(['1']));
-    // Second consecutive absence — now truly ended
-    const ended = await removeEndedStreams(new Set(['1']));
-
+  it('declares a streamer ended after two consecutive missing polls', () => {
+    getNewStreams([makeStream({ user_login: 'a' }), makeStream({ user_login: 'b' })]);
+    removeEndedStreams(new Set(['a'])); // first miss — grace
+    const ended = removeEndedStreams(new Set(['a'])); // second miss — confirmed
     expect(ended).toHaveLength(1);
-    expect(ended[0].id).toBe('2');
+    expect(ended[0].user_login).toBe('b');
   });
 
-  it('removes a confirmed ended stream from the in-memory cache', async () => {
-    await getNewStreams([makeStream({ id: '1' }), makeStream({ id: '2' })]);
-    await removeEndedStreams(new Set(['1'])); // grace
-    await removeEndedStreams(new Set(['1'])); // confirmed
-
+  it('removes a confirmed ended streamer from the active cache', () => {
+    getNewStreams([makeStream({ user_login: 'a' }), makeStream({ user_login: 'b' })]);
+    removeEndedStreams(new Set(['a']));
+    removeEndedStreams(new Set(['a']));
     expect(getActiveCount()).toBe(1);
   });
 
-  it('removes a confirmed ended stream from the DB', async () => {
-    await getNewStreams([makeStream({ id: '1' }), makeStream({ id: '2' })]);
-    await removeEndedStreams(new Set(['1'])); // grace
-    vi.clearAllMocks();
-    await removeEndedStreams(new Set(['1'])); // confirmed
-
-    expect(mockActiveStream.deleteMany).toHaveBeenCalledWith({
-      where: { id: { in: ['2'] } },
-    });
+  it('resets the grace counter when a streamer comes back', () => {
+    getNewStreams([makeStream({ user_login: 'a' }), makeStream({ user_login: 'b' })]);
+    removeEndedStreams(new Set(['a']));               // b: first miss
+    getNewStreams([makeStream({ user_login: 'b' })]);  // b comes back — counter reset
+    removeEndedStreams(new Set(['a', 'b']));           // b is present
+    removeEndedStreams(new Set(['a']));               // b: first miss again
+    const ended = removeEndedStreams(new Set(['a', 'b'])); // b came back again
+    expect(ended.map((s) => s.user_login)).not.toContain('b');
   });
 
-  it('resets grace counter when a stream comes back', async () => {
-    await getNewStreams([makeStream({ id: '1' }), makeStream({ id: '2' })]);
-
-    await removeEndedStreams(new Set(['1'])); // id=2 first miss
-    await getNewStreams([makeStream({ id: '2' })]); // id=2 comes back — counter reset
-    await removeEndedStreams(new Set(['1', '2'])); // id=2 is present
-
-    // After reset, id=2 needs 2 more misses — should not be ended yet
-    await removeEndedStreams(new Set(['1'])); // first miss again
-    const ended = await removeEndedStreams(new Set(['1', '2'])); // came back
-
-    expect(ended.map((s) => s.id)).not.toContain('2');
+  it('returns empty array when no streamers have ended', () => {
+    getNewStreams([makeStream({ user_login: 'a' })]);
+    const ended = removeEndedStreams(new Set(['a']));
+    expect(ended).toHaveLength(0);
   });
 
-  it('does not call deleteMany when no streams are confirmed ended', async () => {
-    await getNewStreams([makeStream({ id: '1' })]);
-    await removeEndedStreams(new Set([])); // first miss — grace
-    expect(mockActiveStream.deleteMany).not.toHaveBeenCalled();
-  });
-
-  it('returns empty array when nothing has ended', async () => {
-    await getNewStreams([makeStream({ id: '1' })]);
-    const ended = await removeEndedStreams(new Set(['1']));
+  it('does not send ended notification for a stream whose id changed but streamer is still live', () => {
+    getNewStreams([makeStream({ user_login: 'a', id: 'old-id' })]);
+    // Next poll: same streamer, new stream ID
+    getNewStreams([makeStream({ user_login: 'a', id: 'new-id' })]);
+    const ended = removeEndedStreams(new Set(['a']));
     expect(ended).toHaveLength(0);
   });
 });

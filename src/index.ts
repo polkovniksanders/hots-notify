@@ -3,6 +3,7 @@ import { getGameIdByName } from './twitch/games';
 import { fetchRussianStreams, TwitchStream } from './twitch/streams';
 import { fetchTopClipsToday } from './twitch/clips';
 import { initTracker, getNewStreams, removeEndedStreams, getActiveCount } from './tracker';
+// tracker operates in-memory only; no DB imports needed here
 import { bot, sendStreamNotification, sendTextMessage, setActiveCountGetter } from './telegram/bot';
 import { formatStreamMessage, formatStreamsEndedMessage, formatDigestMessage, formatSubscriberNotification } from './telegram/formatter';
 import { recordStream, getDailyStats, shouldSendDigest, resetDailyStats } from './stats';
@@ -47,10 +48,10 @@ let botStartedAt = 0; // set in main(); streams started before this are not re-a
 async function poll(): Promise<void> {
   try {
     const streams = await fetchRussianStreams(gameId);
-    const activeIds = new Set(streams.map((s) => s.id));
+    const activeLogins = new Set(streams.map((s) => s.user_login));
 
     // Уведомления об окончании стримов — одно сообщение на все завершённые
-    const endedStreams = await removeEndedStreams(activeIds);
+    const endedStreams = removeEndedStreams(activeLogins);
     if (endedStreams.length > 0) {
       const message = formatStreamsEndedMessage(endedStreams);
       await sendTextMessage(message);
@@ -60,7 +61,7 @@ async function poll(): Promise<void> {
     // Уведомления о новых стримах
     // Стримы, начавшиеся ДО старта бота, добавляются в трекер без уведомления —
     // чтобы рестарт бота не спамил анонсами уже идущих стримов.
-    const newStreams = await getNewStreams(streams);
+    const newStreams = getNewStreams(streams);
     for (const stream of newStreams) {
       const streamStartedAt = new Date(stream.started_at).getTime();
       if (streamStartedAt < botStartedAt) {
@@ -109,10 +110,8 @@ async function main(): Promise<void> {
   log(`Digest hour (UTC): ${config.digestHour}:00`);
 
   botStartedAt = Date.now();
-
-  // Восстанавливаем состояние активных стримов из БД (защита от дублей при перезапуске)
-  const freshDeploy = await initTracker();
-  log(`Tracker state restored from DB${freshDeploy ? ' (fresh deployment — first poll silent)' : ''}`);
+  initTracker();
+  log('Tracker initialized');
 
   // Передаём функцию получения активных стримов в бот для /stats
   setActiveCountGetter(getActiveCount);
