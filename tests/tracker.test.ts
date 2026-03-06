@@ -2,11 +2,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { TwitchStream } from '../src/twitch/streams';
 
 // ---------------------------------------------------------------------------
-// Prisma mock — must be set up before importing tracker
+// Prisma mock
 // ---------------------------------------------------------------------------
 const mockActiveStream = {
   findMany: vi.fn(),
-  createMany: vi.fn(),
+  upsert: vi.fn(),
   deleteMany: vi.fn(),
 };
 
@@ -14,7 +14,6 @@ vi.mock('../src/db/client', () => ({
   getPrisma: () => ({ activeStream: mockActiveStream }),
 }));
 
-// tracker.ts uses module-level state; re-import fresh for each test via resetModules
 import { initTracker, getNewStreams, removeEndedStreams, getActiveCount } from '../src/tracker';
 
 function makeStream(overrides: Partial<TwitchStream> = {}): TwitchStream {
@@ -33,15 +32,20 @@ function makeStream(overrides: Partial<TwitchStream> = {}): TwitchStream {
   };
 }
 
+// Resets module-level Map state before each group via initTracker with empty DB.
+async function resetTracker() {
+  mockActiveStream.findMany.mockResolvedValue([]);
+  await initTracker();
+  mockActiveStream.upsert.mockResolvedValue({});
+  mockActiveStream.deleteMany.mockResolvedValue({ count: 0 });
+}
+
 // ---------------------------------------------------------------------------
-// NOTE: tracker uses module-level Map state. Tests run in sequence and share
-// that state. Each test group resets it via initTracker([]) before acting.
+// initTracker
 // ---------------------------------------------------------------------------
 
 describe('initTracker', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
+  beforeEach(() => vi.clearAllMocks());
 
   it('loads rows from DB into in-memory cache', async () => {
     mockActiveStream.findMany.mockResolvedValue([
@@ -54,11 +58,29 @@ describe('initTracker', () => {
     expect(getActiveCount()).toBe(2);
   });
 
+  it('returns false when DB has existing rows (not a fresh deploy)', async () => {
+    mockActiveStream.findMany.mockResolvedValue([
+      { id: '1', userLogin: 'user1', userName: 'User1', startedAt: '', seenAt: new Date() },
+    ]);
+
+    const result = await initTracker();
+
+    expect(result).toBe(false);
+  });
+
+  it('returns true when DB is empty (fresh deploy)', async () => {
+    mockActiveStream.findMany.mockResolvedValue([]);
+
+    const result = await initTracker();
+
+    expect(result).toBe(true);
+  });
+
   it('does not mark restored streams as new on next getNewStreams call', async () => {
     mockActiveStream.findMany.mockResolvedValue([
       { id: '42', userLogin: 'streamer', userName: 'Streamer', startedAt: '2026-03-07T10:00:00Z', seenAt: new Date() },
     ]);
-    mockActiveStream.createMany.mockResolvedValue({ count: 0 });
+    mockActiveStream.upsert.mockResolvedValue({});
 
     await initTracker();
 
@@ -66,113 +88,138 @@ describe('initTracker', () => {
     const newStreams = await getNewStreams([stream]);
 
     expect(newStreams).toHaveLength(0);
-    expect(mockActiveStream.createMany).not.toHaveBeenCalled();
+    expect(mockActiveStream.upsert).not.toHaveBeenCalled();
   });
 
   it('returns empty cache when DB has no rows', async () => {
     mockActiveStream.findMany.mockResolvedValue([]);
-
     await initTracker();
-
     expect(getActiveCount()).toBe(0);
   });
 });
 
+// ---------------------------------------------------------------------------
+// getNewStreams
+// ---------------------------------------------------------------------------
+
 describe('getNewStreams', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
-    // Reset in-memory state by re-initialising with empty DB
-    mockActiveStream.findMany.mockResolvedValue([]);
-    await initTracker();
-    mockActiveStream.createMany.mockResolvedValue({ count: 0 });
+    await resetTracker();
   });
 
   it('returns new streams not seen before', async () => {
-    const stream = makeStream({ id: '10' });
-    const result = await getNewStreams([stream]);
+    const result = await getNewStreams([makeStream({ id: '10' })]);
     expect(result).toHaveLength(1);
     expect(result[0].id).toBe('10');
   });
 
   it('does not return already-tracked streams', async () => {
     const stream = makeStream({ id: '10' });
-    await getNewStreams([stream]);                     // first poll — marks as seen
-    const result = await getNewStreams([stream]);      // second poll — same stream
+    await getNewStreams([stream]);
+    const result = await getNewStreams([stream]);
     expect(result).toHaveLength(0);
   });
 
-  it('persists new streams to the DB', async () => {
+  it('persists new streams via upsert', async () => {
     const stream = makeStream({ id: '10' });
     await getNewStreams([stream]);
 
-    expect(mockActiveStream.createMany).toHaveBeenCalledWith({
-      data: [{ id: '10', userLogin: 'testuser', userName: 'TestUser', startedAt: '2026-03-07T10:00:00Z' }],
+    expect(mockActiveStream.upsert).toHaveBeenCalledWith({
+      where: { id: '10' },
+      create: { id: '10', userLogin: 'testuser', userName: 'TestUser', startedAt: '2026-03-07T10:00:00Z' },
+      update: {},
     });
   });
 
-  it('does not call createMany when there are no new streams', async () => {
+  it('does not call upsert when there are no new streams', async () => {
     const stream = makeStream({ id: '10' });
-    await getNewStreams([stream]);          // first call — new
+    await getNewStreams([stream]);
     vi.clearAllMocks();
-    await getNewStreams([stream]);          // second call — not new
+    await getNewStreams([stream]);
 
-    expect(mockActiveStream.createMany).not.toHaveBeenCalled();
+    expect(mockActiveStream.upsert).not.toHaveBeenCalled();
   });
 
   it('updates getActiveCount with all current streams', async () => {
-    await getNewStreams([
-      makeStream({ id: '1' }),
-      makeStream({ id: '2' }),
-      makeStream({ id: '3' }),
-    ]);
+    await getNewStreams([makeStream({ id: '1' }), makeStream({ id: '2' }), makeStream({ id: '3' })]);
     expect(getActiveCount()).toBe(3);
   });
 });
 
+// ---------------------------------------------------------------------------
+// removeEndedStreams — grace period: stream must be absent for GRACE_POLLS+1
+// polls (i.e. 2 calls) before being declared ended.
+// ---------------------------------------------------------------------------
+
 describe('removeEndedStreams', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
-    mockActiveStream.findMany.mockResolvedValue([]);
-    await initTracker();
-    mockActiveStream.createMany.mockResolvedValue({ count: 0 });
-    mockActiveStream.deleteMany.mockResolvedValue({ count: 0 });
+    await resetTracker();
   });
 
-  it('returns streams absent from the current poll', async () => {
+  it('does NOT declare a stream ended after just one missing poll (grace period)', async () => {
+    await getNewStreams([makeStream({ id: '1' }), makeStream({ id: '2' })]);
+
+    // Poll where id=2 is absent — first miss, should not be declared ended yet
+    const ended = await removeEndedStreams(new Set(['1']));
+    expect(ended).toHaveLength(0);
+  });
+
+  it('declares a stream ended after GRACE_POLLS+1 consecutive missing polls', async () => {
     const s1 = makeStream({ id: '1' });
     const s2 = makeStream({ id: '2' });
     await getNewStreams([s1, s2]);
 
-    // Only s1 is still live
+    // First absence — grace period
+    await removeEndedStreams(new Set(['1']));
+    // Second consecutive absence — now truly ended
     const ended = await removeEndedStreams(new Set(['1']));
+
     expect(ended).toHaveLength(1);
     expect(ended[0].id).toBe('2');
   });
 
-  it('removes ended streams from the in-memory cache', async () => {
+  it('removes a confirmed ended stream from the in-memory cache', async () => {
     await getNewStreams([makeStream({ id: '1' }), makeStream({ id: '2' })]);
-    await removeEndedStreams(new Set(['1']));
+    await removeEndedStreams(new Set(['1'])); // grace
+    await removeEndedStreams(new Set(['1'])); // confirmed
 
     expect(getActiveCount()).toBe(1);
   });
 
-  it('removes ended streams from the DB', async () => {
+  it('removes a confirmed ended stream from the DB', async () => {
     await getNewStreams([makeStream({ id: '1' }), makeStream({ id: '2' })]);
-    await removeEndedStreams(new Set(['1']));
+    await removeEndedStreams(new Set(['1'])); // grace
+    vi.clearAllMocks();
+    await removeEndedStreams(new Set(['1'])); // confirmed
 
     expect(mockActiveStream.deleteMany).toHaveBeenCalledWith({
       where: { id: { in: ['2'] } },
     });
   });
 
-  it('does not call deleteMany when no streams ended', async () => {
-    await getNewStreams([makeStream({ id: '1' })]);
-    await removeEndedStreams(new Set(['1']));
+  it('resets grace counter when a stream comes back', async () => {
+    await getNewStreams([makeStream({ id: '1' }), makeStream({ id: '2' })]);
 
+    await removeEndedStreams(new Set(['1'])); // id=2 first miss
+    await getNewStreams([makeStream({ id: '2' })]); // id=2 comes back — counter reset
+    await removeEndedStreams(new Set(['1', '2'])); // id=2 is present
+
+    // After reset, id=2 needs 2 more misses — should not be ended yet
+    await removeEndedStreams(new Set(['1'])); // first miss again
+    const ended = await removeEndedStreams(new Set(['1', '2'])); // came back
+
+    expect(ended.map((s) => s.id)).not.toContain('2');
+  });
+
+  it('does not call deleteMany when no streams are confirmed ended', async () => {
+    await getNewStreams([makeStream({ id: '1' })]);
+    await removeEndedStreams(new Set([])); // first miss — grace
     expect(mockActiveStream.deleteMany).not.toHaveBeenCalled();
   });
 
-  it('returns empty array when nothing ended', async () => {
+  it('returns empty array when nothing has ended', async () => {
     await getNewStreams([makeStream({ id: '1' })]);
     const ended = await removeEndedStreams(new Set(['1']));
     expect(ended).toHaveLength(0);

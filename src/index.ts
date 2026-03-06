@@ -42,6 +42,7 @@ async function notifySubscribers(stream: TwitchStream): Promise<void> {
 }
 
 let gameId: string;
+let botStartedAt = 0; // set in main(); streams started before this are not re-announced
 
 async function poll(): Promise<void> {
   try {
@@ -57,8 +58,15 @@ async function poll(): Promise<void> {
     }
 
     // Уведомления о новых стримах
+    // Стримы, начавшиеся ДО старта бота, добавляются в трекер без уведомления —
+    // чтобы рестарт бота не спамил анонсами уже идущих стримов.
     const newStreams = await getNewStreams(streams);
     for (const stream of newStreams) {
+      const streamStartedAt = new Date(stream.started_at).getTime();
+      if (streamStartedAt < botStartedAt) {
+        log(`Skipping notification for pre-existing stream: ${stream.user_name}`);
+        continue;
+      }
       const profile = await getProfile(stream.user_login);
       const caption = formatStreamMessage(stream, profile);
       await sendStreamNotification(stream, caption);
@@ -100,9 +108,11 @@ async function main(): Promise<void> {
   log(`Polling interval: ${config.pollingInterval / 1000}s`);
   log(`Digest hour (UTC): ${config.digestHour}:00`);
 
+  botStartedAt = Date.now();
+
   // Восстанавливаем состояние активных стримов из БД (защита от дублей при перезапуске)
-  await initTracker();
-  log('Tracker state restored from DB');
+  const freshDeploy = await initTracker();
+  log(`Tracker state restored from DB${freshDeploy ? ' (fresh deployment — first poll silent)' : ''}`);
 
   // Передаём функцию получения активных стримов в бот для /stats
   setActiveCountGetter(getActiveCount);

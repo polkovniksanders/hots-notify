@@ -5,6 +5,12 @@ import { getPrisma } from './db/client';
 // Populated from DB on startup so restarts are idempotent.
 const activeStreams = new Map<string, TwitchStream>();
 
+// Tracks how many consecutive polls a stream has been absent.
+// A stream must be missing for GRACE_POLLS+1 polls before being declared ended.
+// This absorbs transient Twitch API inconsistencies (common with short polling intervals).
+const missedPolls = new Map<string, number>();
+const GRACE_POLLS = 1;
+
 export function getActiveCount(): number {
   return activeStreams.size;
 }
@@ -15,14 +21,15 @@ export function getActiveStreams(): TwitchStream[] {
 
 /**
  * Loads previously-active streams from the DB into memory.
+ * Returns true if the DB was empty (first run / fresh deployment).
  * Must be called once before the first poll.
  */
-export async function initTracker(): Promise<void> {
+export async function initTracker(): Promise<boolean> {
   activeStreams.clear();
+  missedPolls.clear();
+
   const rows = await getPrisma().activeStream.findMany();
   for (const row of rows) {
-    // Reconstruct a minimal TwitchStream from the stored fields.
-    // Fields not needed for the "ended" notification are left as defaults.
     activeStreams.set(row.id, {
       id: row.id,
       user_login: row.userLogin,
@@ -36,27 +43,27 @@ export async function initTracker(): Promise<void> {
       is_mature: false,
     });
   }
+
+  return rows.length === 0;
 }
 
 /**
- * Returns streams that haven't been seen before, and persists them to the DB.
- * Updates the in-memory cache with the full stream data for all current streams.
+ * Returns streams not seen before and persists them to the DB.
+ * Uses upsert to safely handle any duplicate-key edge cases.
  */
 export async function getNewStreams(streams: TwitchStream[]): Promise<TwitchStream[]> {
   const newStreams = streams.filter((s) => !activeStreams.has(s.id));
 
   for (const stream of streams) {
     activeStreams.set(stream.id, stream);
+    missedPolls.delete(stream.id); // stream is present — reset any grace counter
   }
 
-  if (newStreams.length > 0) {
-    await getPrisma().activeStream.createMany({
-      data: newStreams.map((s) => ({
-        id: s.id,
-        userLogin: s.user_login,
-        userName: s.user_name,
-        startedAt: s.started_at,
-      })),
+  for (const s of newStreams) {
+    await getPrisma().activeStream.upsert({
+      where: { id: s.id },
+      create: { id: s.id, userLogin: s.user_login, userName: s.user_name, startedAt: s.started_at },
+      update: {},
     });
   }
 
@@ -64,18 +71,29 @@ export async function getNewStreams(streams: TwitchStream[]): Promise<TwitchStre
 }
 
 /**
- * Finds streams no longer in the current poll, removes them from cache and DB,
- * and returns them so the caller can send "ended" notifications.
+ * Finds streams absent from the current poll.
+ * A stream must be missing for GRACE_POLLS+1 consecutive polls before being
+ * declared ended — this prevents false "ended" events from Twitch API blips.
  */
 export async function removeEndedStreams(currentIds: Set<string>): Promise<TwitchStream[]> {
   const ended: TwitchStream[] = [];
   const endedIds: string[] = [];
 
   for (const [id, stream] of activeStreams) {
-    if (!currentIds.has(id)) {
+    if (currentIds.has(id)) {
+      missedPolls.delete(id); // still live — clear counter
+      continue;
+    }
+
+    const missed = (missedPolls.get(id) ?? 0) + 1;
+
+    if (missed > GRACE_POLLS) {
       ended.push(stream);
       endedIds.push(id);
       activeStreams.delete(id);
+      missedPolls.delete(id);
+    } else {
+      missedPolls.set(id, missed);
     }
   }
 
