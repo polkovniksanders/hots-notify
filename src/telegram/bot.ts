@@ -189,41 +189,53 @@ bot.command('setthumbnail', async (ctx) => {
 
   const login = (ctx.match ?? '').trim().split(/\s+/)[0].toLowerCase();
   if (!login) {
-    await ctx.reply('Использование: отправьте фото с подписью /setthumbnail &lt;login&gt;', {
-      parse_mode: 'HTML',
-    });
+    await ctx.reply(
+      'Использование: отправьте фото с подписью <code>/setthumbnail &lt;login&gt;</code>',
+      { parse_mode: 'HTML' },
+    );
     return;
   }
 
   const photo = ctx.message?.photo;
   if (!photo || photo.length === 0) {
-    await ctx.reply('Прикрепите фото к сообщению с командой /setthumbnail &lt;login&gt;', {
+    await ctx.reply(
+      '📎 Прикрепите фото к сообщению с командой <code>/setthumbnail &lt;login&gt;</code>',
+      { parse_mode: 'HTML' },
+    );
+    return;
+  }
+
+  try {
+    const fileId = photo[photo.length - 1].file_id;
+    const file = await ctx.api.getFile(fileId);
+    if (!file.file_path) {
+      await ctx.reply('❌ Не удалось получить файл от Telegram.');
+      return;
+    }
+
+    const fileUrl = `https://api.telegram.org/file/bot${config.botToken}/${file.file_path}`;
+    const response = await fetch(fileUrl);
+    if (!response.ok) {
+      await ctx.reply(`❌ Ошибка загрузки файла от Telegram: HTTP ${response.status}`);
+      return;
+    }
+
+    await fs.promises.mkdir(THUMBNAILS_DIR, { recursive: true });
+    const filePath = path.join(THUMBNAILS_DIR, `${login}.jpg`);
+    const buffer = Buffer.from(await response.arrayBuffer());
+    await fs.promises.writeFile(filePath, buffer);
+
+    await setThumbnailPath(login, filePath);
+    await ctx.reply(
+      `✅ Превью для <b>${login}</b> сохранено.\n📐 Размер файла: ${(buffer.length / 1024).toFixed(1)} КБ`,
+      { parse_mode: 'HTML' },
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await ctx.reply(`❌ Ошибка при сохранении превью: <code>${message}</code>`, {
       parse_mode: 'HTML',
     });
-    return;
   }
-
-  const fileId = photo[photo.length - 1].file_id;
-  const file = await ctx.api.getFile(fileId);
-  if (!file.file_path) {
-    await ctx.reply('Не удалось получить файл от Telegram.');
-    return;
-  }
-
-  const fileUrl = `https://api.telegram.org/file/bot${config.botToken}/${file.file_path}`;
-  const response = await fetch(fileUrl);
-  if (!response.ok) {
-    await ctx.reply(`Ошибка загрузки файла: ${response.status}`);
-    return;
-  }
-
-  await fs.promises.mkdir(THUMBNAILS_DIR, { recursive: true });
-  const filePath = path.join(THUMBNAILS_DIR, `${login}.jpg`);
-  const buffer = Buffer.from(await response.arrayBuffer());
-  await fs.promises.writeFile(filePath, buffer);
-
-  await setThumbnailPath(login, filePath);
-  await ctx.reply(`✅ Превью для <b>${login}</b> сохранено.`, { parse_mode: 'HTML' });
 });
 
 // /clearthumbnail <username>
@@ -237,10 +249,17 @@ bot.command('clearthumbnail', async (ctx) => {
     return;
   }
 
-  const filePath = path.join(THUMBNAILS_DIR, `${login}.jpg`);
-  await fs.promises.rm(filePath, { force: true });
-  await clearThumbnailPath(login);
-  await ctx.reply(`🗑 Превью для <b>${login}</b> удалено.`, { parse_mode: 'HTML' });
+  try {
+    const filePath = path.join(THUMBNAILS_DIR, `${login}.jpg`);
+    await fs.promises.rm(filePath, { force: true });
+    await clearThumbnailPath(login);
+    await ctx.reply(`🗑 Превью для <b>${login}</b> удалено.`, { parse_mode: 'HTML' });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await ctx.reply(`❌ Ошибка при удалении превью: <code>${message}</code>`, {
+      parse_mode: 'HTML',
+    });
+  }
 });
 
 // Регистрируем команды подписки (/follow, /unfollow, /follows)
