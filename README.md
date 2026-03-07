@@ -18,35 +18,41 @@ npm start
 | Переменная | Описание |
 |---|---|
 | `BOT_TOKEN` | Токен Telegram-бота (от @BotFather) |
-| `BOT_NAME` | Username бота |
+| `BOT_NAME` | Username бота (без @) |
 | `CHANNEL_ID` | ID канала или группы для уведомлений |
 | `TWITCH_APP_CLIENT` | Client ID Twitch-приложения |
 | `TWITCH_APP_SECRET` | Client Secret Twitch-приложения |
 | `POLLING_INTERVAL` | Интервал опроса в секундах (по умолчанию `600`) |
 | `DIGEST_HOUR` | Час отправки дайджеста по UTC (по умолчанию `21`, = 00:00 МСК) |
 | `DATABASE_URL` | Путь к SQLite-базе (по умолчанию `file:./hots-notify.db`) |
-| `ADMIN_ID` | Telegram user ID администратора (для управления профилями) |
+| `ADMIN_ID` | Telegram user ID администратора |
+| `GPTUNNEL_API_KEY` | API-ключ gpttunnel.com для AI-приветствий (опционально) |
 
 ## Команды бота
 
-### Публичные
+### Публичные (работают в любом чате)
 
 | Команда | Описание |
 |---|---|
 | `/stats` | Статистика стримов за текущий день |
+| `/follow <twitch_login>` | Подписаться на стримера — получать личные уведомления о старте стрима |
+| `/unfollow <twitch_login>` | Отписаться от стримера |
+| `/follows` | Список текущих подписок |
 
-### Администратора (только в личке с ботом)
+> `/follow`, `/unfollow`, `/follows` работают только в личном чате с ботом.
 
-Все команды работают только в личном чате с ботом и только от пользователя с `ADMIN_ID`.
+### Администратора (только в личке, только от `ADMIN_ID`)
 
 | Команда | Описание |
 |---|---|
-| `/set <username> <поле> <значение>` | Установить поле профиля стримера |
-| `/clear <username> <поле>` | Очистить поле профиля |
-| `/profile <username>` | Показать текущий профиль стримера |
-| `/delprofile <username>` | Удалить профиль стримера полностью |
+| `/set <login> <поле> <значение>` | Установить поле профиля стримера |
+| `/clear <login> <поле>` | Очистить поле профиля |
+| `/profile <login>` | Показать текущий профиль стримера |
+| `/delprofile <login>` | Удалить профиль стримера полностью |
+| `/setthumbnail <login>` | Установить кастомное превью — отправить фото с этой подписью |
+| `/clearthumbnail <login>` | Удалить кастомное превью, вернуться к Twitch-превью |
 
-**Доступные поля:**
+#### Поля профиля (`/set`, `/clear`)
 
 | Поле | Тип | Описание |
 |---|---|---|
@@ -56,19 +62,30 @@ npm start
 | `youtube` | URL | Ссылка на YouTube-канал |
 | `donate` | URL | Ссылка на страницу доната |
 
+Поля `discord`, `telegram`, `youtube`, `donate` проверяются на валидный http/https URL. Профиль автоматически подтягивается при каждом новом стриме.
+
 **Примеры:**
 
 ```
 /set zloyeugene description Топовый игрок, стримит HotS с 2015 года
 /set zloyeugene discord https://discord.gg/xxxxxxx
 /set zloyeugene youtube https://youtube.com/@zloyeugene
-/set zloyeugene donate https://donate.stream/zloyeugene
 /clear zloyeugene donate
 /profile zloyeugene
 /delprofile zloyeugene
 ```
 
-Поля `discord`, `telegram`, `youtube`, `donate` проверяются на валидный http/https URL. Профиль подтягивается автоматически при каждом новом стриме стримера.
+#### Кастомное превью (`/setthumbnail`)
+
+Отправьте фото с подписью `/setthumbnail <login>` прямо в Telegram-чат с ботом. Принимаются как сжатые фото, так и файлы (документы).
+
+- Рекомендуемый размер: **1280×720** (16:9)
+- Файл сохраняется в `data/thumbnails/<login>.jpg` на сервере
+- Если кастомного превью нет — используется актуальный скриншот с Twitch (скачивается при каждом уведомлении, кэш Telegram не используется)
+
+```
+/clearthumbnail zloyeugene   — вернуться к Twitch-превью
+```
 
 ## Деплой на VPS
 
@@ -85,11 +102,15 @@ pm2 save && pm2 startup
 ### Обновление
 
 ```bash
+ssh root@<server>
 cd ~/hots_notify
 bash scripts/deploy.sh
 ```
 
-Скрипт автоматически выполняет: `git pull` → `npm install` → `prisma migrate deploy` → `npm run build` → `pm2 restart`.
+Скрипт автоматически выполняет:
+`git pull` → `npm install` → `prisma generate` → `prisma migrate deploy` → **`npm test`** → `npm run build` → `pm2 restart`
+
+> Если тесты падают — деплой останавливается, бот не перезапускается.
 
 ### Управление
 
@@ -102,8 +123,9 @@ pm2 stop hots-notify      # остановка
 ## Разработка
 
 ```bash
-npm run dev   # запуск с hot-reload (ts-node-dev)
-npm run build # компиляция TypeScript → dist/
+npm run dev    # запуск с hot-reload (ts-node-dev)
+npm test       # запуск тестов (vitest)
+npm run build  # компиляция TypeScript → dist/
 ```
 
 После изменения схемы БД:
