@@ -5,3 +5,8 @@ dist/
 .idea
 
 /src/generated/prisma
+
+# SQLite databases — never commit, contains production data
+*.db
+*.db-shm
+*.db-wal
