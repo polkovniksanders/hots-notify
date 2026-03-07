@@ -19,6 +19,12 @@ import {
   clearThumbnailPath,
 } from '../db/profile';
 import { registerFollowCommands } from './commands/follow';
+import {
+  addChannelSubscription,
+  removeChannelSubscription,
+  getChannelSubscription,
+  getAllChannelSubscriptions,
+} from '../db/channel';
 
 const THUMBNAILS_DIR = path.join(process.cwd(), 'data', 'thumbnails');
 
@@ -271,6 +277,106 @@ bot.command('clearthumbnail', async (ctx) => {
   }
 });
 
+// /addchannel <chat_id> <twitch_login>
+// Привязывает Telegram-канал к стримеру — бот будет слать туда уведомления.
+// Только для администратора в личке.
+bot.command('addchannel', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+
+  const args = (ctx.match ?? '').trim().split(/\s+/);
+  if (args.length < 2 || args[0] === '') {
+    await ctx.reply(
+      'Использование: /addchannel &lt;chat_id&gt; &lt;twitch_login&gt;\n\n' +
+        'Пример: <code>/addchannel -1001234567890 zloyeugene</code>\n\n' +
+        'chat_id канала можно узнать, переслав любое сообщение из канала сюда.',
+      { parse_mode: 'HTML' },
+    );
+    return;
+  }
+
+  const [chatIdStr, streamerLogin] = args;
+  let chatId: bigint;
+  try {
+    chatId = BigInt(chatIdStr);
+  } catch {
+    await ctx.reply('❌ Некорректный chat_id. Должно быть число (например: <code>-1001234567890</code>).', {
+      parse_mode: 'HTML',
+    });
+    return;
+  }
+
+  await addChannelSubscription(chatId, streamerLogin);
+  await ctx.reply(
+    `✅ Канал <code>${chatId}</code> привязан к стримеру <b>${streamerLogin.toLowerCase()}</b>.\n` +
+      `Бот будет слать уведомления о его стримах в этот чат.`,
+    { parse_mode: 'HTML' },
+  );
+});
+
+// /removechannel <chat_id>
+// Отвязывает Telegram-канал от стримера. Только для администратора в личке.
+bot.command('removechannel', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+
+  const chatIdStr = (ctx.match ?? '').trim().split(/\s+/)[0];
+  if (!chatIdStr) {
+    await ctx.reply('Использование: /removechannel &lt;chat_id&gt;', { parse_mode: 'HTML' });
+    return;
+  }
+
+  let chatId: bigint;
+  try {
+    chatId = BigInt(chatIdStr);
+  } catch {
+    await ctx.reply('❌ Некорректный chat_id.', { parse_mode: 'HTML' });
+    return;
+  }
+
+  const removed = await removeChannelSubscription(chatId);
+  if (removed) {
+    await ctx.reply(`🗑 Канал <code>${chatId}</code> отвязан.`, { parse_mode: 'HTML' });
+  } else {
+    await ctx.reply(`Канал <code>${chatId}</code> не найден в базе.`, { parse_mode: 'HTML' });
+  }
+});
+
+// /listchannels
+// Показывает все зарегистрированные каналы. Только для администратора в личке.
+bot.command('listchannels', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+
+  const subs = await getAllChannelSubscriptions();
+  if (subs.length === 0) {
+    await ctx.reply('Зарегистрированных каналов нет.', { parse_mode: 'HTML' });
+    return;
+  }
+
+  const lines = [`📋 <b>Зарегистрированные каналы (${subs.length}):</b>`, ``];
+  for (const s of subs) {
+    lines.push(`<code>${s.chatId}</code> → <b>${s.streamerLogin}</b>`);
+  }
+  await ctx.reply(lines.join('\n'), { parse_mode: 'HTML' });
+});
+
+// Помощь при пересылке сообщения из канала: отвечает chat_id источника.
+// Упрощает получение chat_id канала для /addchannel.
+bot.on('message:forward_origin', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+
+  const origin = ctx.message.forward_origin;
+  if (origin.type === 'channel') {
+    const chatId = origin.chat.id;
+    const sub = await getChannelSubscription(BigInt(chatId));
+    const status = sub
+      ? `✅ Уже привязан к <b>${sub.streamerLogin}</b>`
+      : `➕ Не привязан. Команда: <code>/addchannel ${chatId} &lt;twitch_login&gt;</code>`;
+    await ctx.reply(
+      `📋 chat_id этого канала: <code>${chatId}</code>\n${status}`,
+      { parse_mode: 'HTML' },
+    );
+  }
+});
+
 // Регистрируем команды подписки (/follow, /unfollow, /follows)
 registerFollowCommands(bot);
 
@@ -280,39 +386,47 @@ export function setActiveCountGetter(fn: () => number): void {
   getActiveCount = fn;
 }
 
-export async function sendStreamNotification(
+/** Builds an InputFile for the stream thumbnail. Custom file takes priority over Twitch URL. */
+async function buildThumbnail(
+  stream: TwitchStream,
+  thumbnailPath?: string | null,
+): Promise<InputFile | null> {
+  if (thumbnailPath && fs.existsSync(thumbnailPath)) {
+    return new InputFile(fs.createReadStream(thumbnailPath));
+  }
+  try {
+    const response = await fetch(getThumbnailUrl(stream));
+    if (response.ok) {
+      // Send bytes to bypass Telegram's URL-based cache
+      const buffer = Buffer.from(await response.arrayBuffer());
+      return new InputFile(buffer, 'thumbnail.jpg');
+    }
+  } catch {
+    // fall through
+  }
+  return null;
+}
+
+/**
+ * Sends a stream notification to any Telegram chat.
+ * Used both for the main channel and for individual streamer channels.
+ */
+export async function sendStreamToChat(
+  chatId: number | string | bigint,
   stream: TwitchStream,
   caption: string,
   thumbnailPath?: string | null,
 ): Promise<void> {
   const url = `https://twitch.tv/${stream.user_login}`;
-
   const keyboard = new InlineKeyboard()
     .url('▶️ Смотреть', url)
     .text('🔔 Подписаться', `subscribe:${stream.user_login}`);
 
-  // Resolve photo source: custom local file → download from Twitch → fallback to text
-  let photo: InputFile | null = null;
-
-  if (thumbnailPath && fs.existsSync(thumbnailPath)) {
-    photo = new InputFile(fs.createReadStream(thumbnailPath));
-  } else {
-    try {
-      const thumbnailUrl = getThumbnailUrl(stream);
-      const response = await fetch(thumbnailUrl);
-      if (response.ok) {
-        // Send as bytes to bypass Telegram's URL-based thumbnail cache
-        const buffer = Buffer.from(await response.arrayBuffer());
-        photo = new InputFile(buffer, 'thumbnail.jpg');
-      }
-    } catch {
-      // fall through to text message
-    }
-  }
+  const photo = await buildThumbnail(stream, thumbnailPath);
 
   if (photo) {
     try {
-      await bot.api.sendPhoto(config.channelId, photo, {
+      await bot.api.sendPhoto(String(chatId), photo, {
         caption,
         parse_mode: 'HTML',
         reply_markup: keyboard,
@@ -323,11 +437,19 @@ export async function sendStreamNotification(
     }
   }
 
-  await bot.api.sendMessage(config.channelId, caption, {
+  await bot.api.sendMessage(String(chatId), caption, {
     parse_mode: 'HTML',
     link_preview_options: { is_disabled: true },
     reply_markup: keyboard,
   });
+}
+
+export async function sendStreamNotification(
+  stream: TwitchStream,
+  caption: string,
+  thumbnailPath?: string | null,
+): Promise<void> {
+  await sendStreamToChat(config.channelId, stream, caption, thumbnailPath);
 }
 
 export async function sendTextMessage(message: string): Promise<void> {

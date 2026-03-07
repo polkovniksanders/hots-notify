@@ -1,18 +1,55 @@
 import { config } from './config';
 import { getGameIdByName } from './twitch/games';
-import { fetchRussianStreams, TwitchStream } from './twitch/streams';
+import { fetchRussianStreams, fetchStreamsByLogins, TwitchStream } from './twitch/streams';
 import { fetchTopClipsToday } from './twitch/clips';
 import { initTracker, getNewStreams, removeEndedStreams, getActiveCount } from './tracker';
 // tracker operates in-memory only; no DB imports needed here
-import { bot, sendStreamNotification, sendTextMessage, setActiveCountGetter } from './telegram/bot';
+import { bot, sendStreamNotification, sendStreamToChat, sendTextMessage, setActiveCountGetter } from './telegram/bot';
 import { formatStreamMessage, formatStreamsEndedMessage, formatDigestMessage, formatSubscriberNotification } from './telegram/formatter';
 import { recordStream, getDailyStats, shouldSendDigest, resetDailyStats } from './stats';
 import { getProfile } from './db/profile';
 import { getSubscribers, removeAllSubscriptions } from './db/subscription';
+import { getChannelsByStreamer, getSubscribedStreamerLogins, removeChannelSubscription } from './db/channel';
 import { GrammyError } from 'grammy';
+
+const FAST_POLL_INTERVAL_MS = 30_000;
 
 function log(message: string): void {
   console.log(`[${new Date().toISOString()}] ${message}`);
+}
+
+/**
+ * Sends a stream notification to all Telegram channels linked to this streamer.
+ * Auto-removes channels where the bot was kicked or the chat no longer exists.
+ */
+async function notifyLinkedChannels(
+  stream: TwitchStream,
+  caption: string,
+  thumbnailPath?: string | null,
+): Promise<void> {
+  const channels = await getChannelsByStreamer(stream.user_login);
+  if (channels.length === 0) return;
+
+  await Promise.allSettled(
+    channels.map(async ({ chatId }) => {
+      try {
+        await sendStreamToChat(chatId, stream, caption, thumbnailPath);
+      } catch (err) {
+        const isKicked =
+          err instanceof GrammyError &&
+          (err.description.includes('bot was kicked') ||
+            err.description.includes('chat not found') ||
+            err.description.includes('bot is not a member'));
+
+        if (isKicked) {
+          log(`Channel ${chatId} is inaccessible — removing channel subscription`);
+          await removeChannelSubscription(chatId);
+        } else {
+          log(`Failed to notify channel ${chatId}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    }),
+  );
 }
 
 async function notifySubscribers(stream: TwitchStream): Promise<void> {
@@ -45,6 +82,37 @@ async function notifySubscribers(stream: TwitchStream): Promise<void> {
 let gameId: string;
 let botStartedAt = 0; // set in main(); streams started before this are not re-announced
 
+/**
+ * Fast poll: runs every 30s only for streamers with a linked Telegram channel.
+ * Shares the main tracker → prevents double-notifications from the regular poll.
+ * Gives ~15-30s detection time vs 120s for the regular poll.
+ */
+async function fastPoll(): Promise<void> {
+  try {
+    const logins = await getSubscribedStreamerLogins();
+    if (logins.length === 0) return;
+
+    const streams = await fetchStreamsByLogins(logins);
+    const newStreams = getNewStreams(streams);
+
+    for (const stream of newStreams) {
+      const streamStartedAt = new Date(stream.started_at).getTime();
+      if (streamStartedAt < botStartedAt) continue;
+
+      const profile = await getProfile(stream.user_login);
+      const caption = formatStreamMessage(stream, profile);
+
+      await sendStreamNotification(stream, caption, profile?.thumbnailPath);
+      await notifySubscribers(stream);
+      await notifyLinkedChannels(stream, caption, profile?.thumbnailPath);
+      recordStream(stream);
+      log(`[fast-poll] Notified: ${stream.user_name} (${stream.viewer_count} viewers)`);
+    }
+  } catch (err) {
+    log(`Fast poll error: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 async function poll(): Promise<void> {
   try {
     const streams = await fetchRussianStreams(gameId);
@@ -72,6 +140,7 @@ async function poll(): Promise<void> {
       const caption = formatStreamMessage(stream, profile);
       await sendStreamNotification(stream, caption, profile?.thumbnailPath);
       await notifySubscribers(stream);
+      await notifyLinkedChannels(stream, caption, profile?.thumbnailPath);
       log(`Notified: ${stream.user_name} (${stream.viewer_count} viewers)`);
     }
 
@@ -121,6 +190,10 @@ async function main(): Promise<void> {
 
   await poll();
   setInterval(poll, config.pollingInterval);
+
+  // Fast poll for streamers with linked channels — shares main tracker, no double-notifications
+  setInterval(fastPoll, FAST_POLL_INTERVAL_MS);
+  log(`Fast poll started (interval: ${FAST_POLL_INTERVAL_MS / 1000}s)`);
 }
 
 main();

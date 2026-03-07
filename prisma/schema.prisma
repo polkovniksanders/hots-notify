@@ -29,6 +29,17 @@ model ActiveStream {
   seenAt    DateTime @default(now())
 }
 
+/// A Telegram channel/group linked to a specific Twitch streamer.
+/// When that streamer goes live the bot posts a notification to that chat.
+/// chatId is the primary key — one chat tracks exactly one streamer.
+model ChannelSubscription {
+  chatId        BigInt   @id
+  streamerLogin String
+  createdAt     DateTime @default(now())
+
+  @@index([streamerLogin])
+}
+
 /// Personal subscriptions: a Telegram user subscribes to a Twitch streamer
 /// and receives a DM when that streamer goes live.
 model Subscription {

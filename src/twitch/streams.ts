@@ -48,6 +48,29 @@ async function fetchStreams(
 }
 
 /**
+ * Fetches current live streams for a specific list of Twitch logins.
+ * Used for fast-polling channels that have a linked streamer.
+ * Returns only the streams that are currently live.
+ */
+export async function fetchStreamsByLogins(logins: string[]): Promise<TwitchStream[]> {
+  if (logins.length === 0) return [];
+  const token = await getAccessToken();
+  // URLSearchParams handles repeated user_login params correctly
+  const params = new URLSearchParams({ first: '100' });
+  for (const login of logins) params.append('user_login', login);
+  const response = await axios.get(
+    `https://api.twitch.tv/helix/streams?${params.toString()}`,
+    {
+      headers: {
+        'Client-ID': config.twitchClientId,
+        Authorization: `Bearer ${token}`,
+      },
+    },
+  );
+  return response.data.data as TwitchStream[];
+}
+
+/**
  * Fetches Russian HotS streams using two strategies:
  * 1. Official language=ru filter (fast, but misses streamers with wrong language set)
  * 2. All streams filtered by Cyrillic title or Russian tags (catches the rest)
