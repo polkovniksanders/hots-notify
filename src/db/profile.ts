@@ -10,6 +10,7 @@ export interface StreamerProfile {
   telegram: string | null;
   youtube: string | null;
   donate: string | null;
+  thumbnailPath: string | null;
 }
 
 // URL-поля: обязаны содержать валидный https/http URL
@@ -68,4 +69,25 @@ export async function deleteProfile(userLogin: string): Promise<boolean> {
     where: { userLogin: userLogin.toLowerCase() },
   });
   return result.count > 0;
+}
+
+export async function setThumbnailPath(
+  userLogin: string,
+  filePath: string,
+): Promise<StreamerProfile> {
+  const login = userLogin.toLowerCase();
+  return getPrisma().streamerProfile.upsert({
+    where: { userLogin: login },
+    create: { userLogin: login, thumbnailPath: filePath },
+    update: { thumbnailPath: filePath },
+  });
+}
+
+export async function clearThumbnailPath(userLogin: string): Promise<StreamerProfile> {
+  const login = userLogin.toLowerCase();
+  return getPrisma().streamerProfile.upsert({
+    where: { userLogin: login },
+    create: { userLogin: login },
+    update: { thumbnailPath: null },
+  });
 }

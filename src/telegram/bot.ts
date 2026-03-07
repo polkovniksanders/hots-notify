@@ -1,4 +1,6 @@
-import { Bot, InlineKeyboard } from 'grammy';
+import fs from 'fs';
+import path from 'path';
+import { Bot, InlineKeyboard, InputFile } from 'grammy';
 import { config } from '../config';
 import { TwitchStream } from '../twitch/streams';
 import { getThumbnailUrl, formatStatsMessage } from './formatter';
@@ -13,8 +15,12 @@ import {
   isUrlField,
   isValidHttpUrl,
   PROFILE_FIELDS,
+  setThumbnailPath,
+  clearThumbnailPath,
 } from '../db/profile';
 import { registerFollowCommands } from './commands/follow';
+
+const THUMBNAILS_DIR = path.join(process.cwd(), 'data', 'thumbnails');
 
 export const bot = new Bot(config.botToken);
 
@@ -175,6 +181,68 @@ bot.command('delprofile', async (ctx) => {
   }
 });
 
+// /setthumbnail <username>
+// Устанавливает кастомное превью для стримера. Отправьте фото с этой подписью.
+// Только для администратора в личке.
+bot.command('setthumbnail', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+
+  const login = (ctx.match ?? '').trim().split(/\s+/)[0].toLowerCase();
+  if (!login) {
+    await ctx.reply('Использование: отправьте фото с подписью /setthumbnail &lt;login&gt;', {
+      parse_mode: 'HTML',
+    });
+    return;
+  }
+
+  const photo = ctx.message?.photo;
+  if (!photo || photo.length === 0) {
+    await ctx.reply('Прикрепите фото к сообщению с командой /setthumbnail &lt;login&gt;', {
+      parse_mode: 'HTML',
+    });
+    return;
+  }
+
+  const fileId = photo[photo.length - 1].file_id;
+  const file = await ctx.api.getFile(fileId);
+  if (!file.file_path) {
+    await ctx.reply('Не удалось получить файл от Telegram.');
+    return;
+  }
+
+  const fileUrl = `https://api.telegram.org/file/bot${config.botToken}/${file.file_path}`;
+  const response = await fetch(fileUrl);
+  if (!response.ok) {
+    await ctx.reply(`Ошибка загрузки файла: ${response.status}`);
+    return;
+  }
+
+  await fs.promises.mkdir(THUMBNAILS_DIR, { recursive: true });
+  const filePath = path.join(THUMBNAILS_DIR, `${login}.jpg`);
+  const buffer = Buffer.from(await response.arrayBuffer());
+  await fs.promises.writeFile(filePath, buffer);
+
+  await setThumbnailPath(login, filePath);
+  await ctx.reply(`✅ Превью для <b>${login}</b> сохранено.`, { parse_mode: 'HTML' });
+});
+
+// /clearthumbnail <username>
+// Удаляет кастомное превью стримера. Только для администратора в личке.
+bot.command('clearthumbnail', async (ctx) => {
+  if (!isAdmin(ctx)) return;
+
+  const login = (ctx.match ?? '').trim().split(/\s+/)[0].toLowerCase();
+  if (!login) {
+    await ctx.reply('Использование: /clearthumbnail &lt;login&gt;', { parse_mode: 'HTML' });
+    return;
+  }
+
+  const filePath = path.join(THUMBNAILS_DIR, `${login}.jpg`);
+  await fs.promises.rm(filePath, { force: true });
+  await clearThumbnailPath(login);
+  await ctx.reply(`🗑 Превью для <b>${login}</b> удалено.`, { parse_mode: 'HTML' });
+});
+
 // Регистрируем команды подписки (/follow, /unfollow, /follows)
 registerFollowCommands(bot);
 
@@ -184,27 +252,54 @@ export function setActiveCountGetter(fn: () => number): void {
   getActiveCount = fn;
 }
 
-export async function sendStreamNotification(stream: TwitchStream, caption: string): Promise<void> {
-  const thumbnailUrl = getThumbnailUrl(stream);
+export async function sendStreamNotification(
+  stream: TwitchStream,
+  caption: string,
+  thumbnailPath?: string | null,
+): Promise<void> {
   const url = `https://twitch.tv/${stream.user_login}`;
 
   const keyboard = new InlineKeyboard()
     .url('▶️ Смотреть', url)
     .text('🔔 Подписаться', `subscribe:${stream.user_login}`);
 
-  try {
-    await bot.api.sendPhoto(config.channelId, thumbnailUrl, {
-      caption,
-      parse_mode: 'HTML',
-      reply_markup: keyboard,
-    });
-  } catch {
-    await bot.api.sendMessage(config.channelId, caption, {
-      parse_mode: 'HTML',
-      link_preview_options: { is_disabled: true },
-      reply_markup: keyboard,
-    });
+  // Resolve photo source: custom local file → download from Twitch → fallback to text
+  let photo: InputFile | null = null;
+
+  if (thumbnailPath && fs.existsSync(thumbnailPath)) {
+    photo = new InputFile(fs.createReadStream(thumbnailPath));
+  } else {
+    try {
+      const thumbnailUrl = getThumbnailUrl(stream);
+      const response = await fetch(thumbnailUrl);
+      if (response.ok) {
+        // Send as bytes to bypass Telegram's URL-based thumbnail cache
+        const buffer = Buffer.from(await response.arrayBuffer());
+        photo = new InputFile(buffer, 'thumbnail.jpg');
+      }
+    } catch {
+      // fall through to text message
+    }
   }
+
+  if (photo) {
+    try {
+      await bot.api.sendPhoto(config.channelId, photo, {
+        caption,
+        parse_mode: 'HTML',
+        reply_markup: keyboard,
+      });
+      return;
+    } catch {
+      // fall through to text message
+    }
+  }
+
+  await bot.api.sendMessage(config.channelId, caption, {
+    parse_mode: 'HTML',
+    link_preview_options: { is_disabled: true },
+    reply_markup: keyboard,
+  });
 }
 
 export async function sendTextMessage(message: string): Promise<void> {

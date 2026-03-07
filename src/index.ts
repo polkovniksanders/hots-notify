@@ -70,7 +70,7 @@ async function poll(): Promise<void> {
       }
       const profile = await getProfile(stream.user_login);
       const caption = formatStreamMessage(stream, profile);
-      await sendStreamNotification(stream, caption);
+      await sendStreamNotification(stream, caption, profile?.thumbnailPath);
       await notifySubscribers(stream);
       log(`Notified: ${stream.user_name} (${stream.viewer_count} viewers)`);
     }

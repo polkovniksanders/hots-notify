@@ -8,14 +8,15 @@ datasource db {
 }
 
 model StreamerProfile {
-  userLogin   String   @id
-  description String?
-  discord     String?
-  telegram    String?
-  youtube     String?
-  donate      String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  userLogin     String   @id
+  description   String?
+  discord       String?
+  telegram      String?
+  youtube       String?
+  donate        String?
+  thumbnailPath String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 }
 
 /// Tracks currently-live streams so the bot survives restarts without
