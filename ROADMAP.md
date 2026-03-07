@@ -31,11 +31,14 @@
 ### Задача 5 (частично): Профили стримеров
 Команды администратора `/set`, `/clear`, `/profile`, `/delprofile`. Поля: `description`, `discord`, `telegram`, `youtube`, `donate`. Автоматически добавляются в карточку стрима.
 
+### Каналы стримеров (`/addchannel`)
+Telegram-канал привязывается к стримеру через `/addchannel <chat_id> <login>`. При старте стрима бот постит уведомление в этот канал. Быстрый поллинг каждые 30 сек только для зарегистрированных стримеров (~15–30 сек задержка). Трекер общий с основным поллингом — двойные уведомления исключены. Автоудаление мёртвых каналов. Команды: `/addchannel`, `/removechannel`, `/listchannels`.
+
 ### Кастомные превью стримеров
 `/setthumbnail <login>` (фото в подписи к сообщению) — сохраняет JPG на сервере в `data/thumbnails/`. `/clearthumbnail <login>` — удаляет. Поддерживаются как сжатые фото, так и файлы (документы). Кастомное превью имеет приоритет над Twitch-скриншотом.
 
 ### Качество кода и деплой
-- Тесты: 111 тестов (vitest), 7 файлов — tracker, formatter, streams, profile, subscription, users, follow
+- Тесты: 128 тестов (vitest), 8 файлов — tracker, formatter, streams, profile, subscription, users, follow, channel
 - `npm test` в `deploy.sh` перед build: падение тестов останавливает деплой
 - Prisma миграции применяются автоматически при деплое
 - `*.db` в `.gitignore` — БД не попадает в репозиторий
@@ -60,21 +63,164 @@
 
 ---
 
-## ЗАДАЧА 8: Twitch EventSub для known стримеров
+## ЗАДАЧА 8: Twitch EventSub — мгновенные уведомления (<5 сек)
 
 ### Цель
-Мгновенные уведомления (< 5 сек) для стримеров с профилем вместо ожидания polling.
+Заменить быстрый поллинг (30 сек) на push-уведомления от Twitch. Twitch сам вызывает наш вебхук в момент начала стрима.
 
-### Архитектура
+### Архитектура после реализации
 ```
-Стримеры с профилем → EventSub webhook → мгновенный анонс
-Остальные → polling каждые N минут
+Стримеры с каналом → EventSub stream.online → webhook → ~5 сек задержка
+Остальные RU-стримеры → polling каждые 120 сек
 ```
 
-### Требования
-- Публичный HTTPS endpoint (nginx + Let's Encrypt)
-- При регистрации стримера — автоматическая подписка на `stream.online`
-- Верификация подписи Twitch в webhook-обработчике
+### Предварительные требования на сервере
+```bash
+# 1. Установить nginx
+apt install nginx
+
+# 2. Получить TLS-сертификат (Let's Encrypt)
+apt install certbot python3-certbot-nginx
+certbot --nginx -d yourdomain.com
+
+# 3. Настроить nginx reverse proxy
+# /etc/nginx/sites-available/hots-notify:
+server {
+    listen 443 ssl;
+    server_name yourdomain.com;
+
+    location /webhook/twitch {
+        proxy_pass http://localhost:3000;
+        proxy_set_header X-Forwarded-For $remote_addr;
+    }
+}
+```
+
+### Новые переменные окружения
+```env
+PUBLIC_URL=https://yourdomain.com   # публичный URL сервера
+EVENTSUB_SECRET=random_32_char_string  # секрет для верификации Twitch
+PORT=3000                              # порт Express (уже есть в стеке)
+```
+
+### Изменения в схеме БД
+```prisma
+model ChannelSubscription {
+  chatId         BigInt   @id
+  streamerLogin  String
+  twitchUserId   String?  // Twitch broadcaster ID (нужен для EventSub)
+  eventSubId     String?  // ID подписки EventSub (для отмены при /removechannel)
+  createdAt      DateTime @default(now())
+}
+```
+
+### Новые файлы
+
+**`src/eventsub/verify.ts`** — верификация подписи Twitch:
+```typescript
+import crypto from 'crypto';
+
+export function verifyTwitchSignature(
+  body: Buffer,
+  headers: Record<string, string>,
+  secret: string,
+): boolean {
+  const msgId = headers['twitch-eventsub-message-id'];
+  const timestamp = headers['twitch-eventsub-message-timestamp'];
+  const signature = headers['twitch-eventsub-message-signature'];
+  const hmac = 'sha256=' + crypto
+    .createHmac('sha256', secret)
+    .update(msgId + timestamp + body)
+    .digest('hex');
+  return crypto.timingSafeEqual(Buffer.from(hmac), Buffer.from(signature));
+}
+```
+
+**`src/eventsub/register.ts`** — регистрация/отмена подписки в Twitch:
+```typescript
+// Вызывается при /addchannel — подписывает на stream.online для стримера
+export async function registerStreamOnline(broadcasterId: string): Promise<string> {
+  const token = await getAccessToken();
+  const res = await fetch('https://api.twitch.tv/helix/eventsub/subscriptions', {
+    method: 'POST',
+    headers: {
+      'Client-ID': config.twitchClientId,
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      type: 'stream.online',
+      version: '1',
+      condition: { broadcaster_user_id: broadcasterId },
+      transport: {
+        method: 'webhook',
+        callback: `${config.publicUrl}/webhook/twitch`,
+        secret: config.eventSubSecret,
+      },
+    }),
+  });
+  const data = await res.json();
+  return data.data[0].id; // EventSub subscription ID
+}
+
+// Вызывается при /removechannel
+export async function deleteEventSubSubscription(eventSubId: string): Promise<void> {
+  const token = await getAccessToken();
+  await fetch(`https://api.twitch.tv/helix/eventsub/subscriptions?id=${eventSubId}`, {
+    method: 'DELETE',
+    headers: {
+      'Client-ID': config.twitchClientId,
+      'Authorization': `Bearer ${token}`,
+    },
+  });
+}
+```
+
+**`src/eventsub/webhook.ts`** — Express endpoint:
+```typescript
+import express from 'express';
+import { verifyTwitchSignature } from './verify';
+import { config } from '../config';
+
+export const webhookRouter = express.Router();
+
+// Twitch требует raw body для верификации подписи
+webhookRouter.post('/webhook/twitch', express.raw({ type: 'application/json' }), async (req, res) => {
+  if (!verifyTwitchSignature(req.body, req.headers as Record<string, string>, config.eventSubSecret)) {
+    return res.status(403).send('Forbidden');
+  }
+
+  const body = JSON.parse(req.body.toString());
+  const msgType = req.headers['twitch-eventsub-message-type'];
+
+  // Twitch verification challenge при создании подписки
+  if (msgType === 'webhook_callback_verification') {
+    return res.status(200).send(body.challenge);
+  }
+
+  if (msgType === 'notification' && body.subscription.type === 'stream.online') {
+    const login = body.event.broadcaster_user_login;
+    // Запускаем обработку в фоне, не блокируем ответ Twitch
+    handleStreamOnline(login).catch(console.error);
+  }
+
+  res.status(204).send();
+});
+```
+
+### Изменения в `/addchannel`
+```typescript
+// При добавлении канала:
+// 1. Получить Twitch user ID по логину (уже есть getTwitchUser)
+// 2. Зарегистрировать EventSub подписку
+// 3. Сохранить eventSubId и twitchUserId в ChannelSubscription
+const twitchUser = await getTwitchUser(streamerLogin);
+const eventSubId = await registerStreamOnline(twitchUser.id);
+await addChannelSubscription(chatId, streamerLogin, twitchUser.id, eventSubId);
+```
+
+### Взаимодействие с существующим fast poll
+После реализации EventSub fast poll для зарегистрированных стримеров можно убрать — он уже не нужен. Или оставить как fallback на случай временной недоступности вебхука.
 
 ---
 

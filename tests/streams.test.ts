@@ -12,7 +12,7 @@ vi.mock('../src/config', () => ({
 }));
 
 import axios from 'axios';
-import { fetchRussianStreams, isRussianByContent } from '../src/twitch/streams';
+import { fetchRussianStreams, fetchStreamsByLogins, isRussianByContent } from '../src/twitch/streams';
 
 function makeStream(overrides: Partial<TwitchStream> = {}): TwitchStream {
   return {
@@ -142,5 +142,86 @@ describe('fetchRussianStreams', () => {
     const result = await fetchRussianStreams('138585');
 
     expect(result).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// fetchStreamsByLogins — fast poll for specific streamers
+// ---------------------------------------------------------------------------
+
+describe('fetchStreamsByLogins', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns empty array and makes no API call for empty input', async () => {
+    const result = await fetchStreamsByLogins([]);
+
+    expect(result).toHaveLength(0);
+    expect(axios.get).not.toHaveBeenCalled();
+  });
+
+  it('returns streams for the given logins', async () => {
+    const stream = makeStream({ user_login: 'zloyeugene', user_name: 'ZloyEugene' });
+    vi.mocked(axios.get).mockResolvedValue({ data: { data: [stream] } });
+
+    const result = await fetchStreamsByLogins(['zloyeugene']);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].user_login).toBe('zloyeugene');
+  });
+
+  it('returns empty array when none of the streamers are live', async () => {
+    vi.mocked(axios.get).mockResolvedValue({ data: { data: [] } });
+
+    const result = await fetchStreamsByLogins(['offline_streamer']);
+
+    expect(result).toHaveLength(0);
+  });
+
+  it('makes exactly one API call', async () => {
+    vi.mocked(axios.get).mockResolvedValue({ data: { data: [] } });
+
+    await fetchStreamsByLogins(['streamer1', 'streamer2']);
+
+    expect(axios.get).toHaveBeenCalledTimes(1);
+  });
+
+  it('includes all logins in the request URL', async () => {
+    vi.mocked(axios.get).mockResolvedValue({ data: { data: [] } });
+
+    await fetchStreamsByLogins(['streamer1', 'streamer2']);
+
+    const url = vi.mocked(axios.get).mock.calls[0][0] as string;
+    expect(url).toContain('user_login=streamer1');
+    expect(url).toContain('user_login=streamer2');
+  });
+
+  it('calls the /helix/streams endpoint', async () => {
+    vi.mocked(axios.get).mockResolvedValue({ data: { data: [] } });
+
+    await fetchStreamsByLogins(['streamer1']);
+
+    const url = vi.mocked(axios.get).mock.calls[0][0] as string;
+    expect(url).toContain('api.twitch.tv/helix/streams');
+  });
+
+  it('passes the access token in the Authorization header', async () => {
+    vi.mocked(axios.get).mockResolvedValue({ data: { data: [] } });
+
+    await fetchStreamsByLogins(['streamer1']);
+
+    const options = vi.mocked(axios.get).mock.calls[0][1];
+    expect(options?.headers?.['Authorization']).toBe('Bearer test-token');
+  });
+
+  it('returns multiple live streams', async () => {
+    const streams = [
+      makeStream({ id: '1', user_login: 'streamer1' }),
+      makeStream({ id: '2', user_login: 'streamer2' }),
+    ];
+    vi.mocked(axios.get).mockResolvedValue({ data: { data: streams } });
+
+    const result = await fetchStreamsByLogins(['streamer1', 'streamer2']);
+
+    expect(result).toHaveLength(2);
   });
 });
