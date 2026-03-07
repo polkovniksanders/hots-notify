@@ -196,17 +196,20 @@ bot.command('setthumbnail', async (ctx) => {
     return;
   }
 
+  // Принимаем и сжатое фото, и файл-документ (когда отправляют как файл с ПК)
   const photo = ctx.message?.photo;
-  if (!photo || photo.length === 0) {
+  const document = ctx.message?.document;
+  const fileId = photo ? photo[photo.length - 1].file_id : document?.file_id;
+
+  if (!fileId) {
     await ctx.reply(
-      '📎 Прикрепите фото к сообщению с командой <code>/setthumbnail &lt;login&gt;</code>',
+      '📎 Прикрепите фото (или файл) к сообщению с командой <code>/setthumbnail &lt;login&gt;</code>',
       { parse_mode: 'HTML' },
     );
     return;
   }
 
   try {
-    const fileId = photo[photo.length - 1].file_id;
     const file = await ctx.api.getFile(fileId);
     if (!file.file_path) {
       await ctx.reply('❌ Не удалось получить файл от Telegram.');
