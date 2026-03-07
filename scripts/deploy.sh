@@ -22,6 +22,9 @@ npx prisma generate
 echo "==> Applying database migrations..."
 npx prisma migrate deploy
 
+echo "==> Running tests..."
+npm test
+
 echo "==> Building..."
 npm run build
 

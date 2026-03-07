@@ -67,54 +67,62 @@ src/
 
 ## Deployment (Beget VPS)
 
-### Первоначальная настройка
+### Сервер
+
+- **SSH:** `root@155.212.131.33`
+- **Путь проекта:** `$HOME/hots_notify` (т.е. `/root/hots_notify`)
+- **PM2 app name:** `hots-notify`
+- **OS:** Linux (Beget VPS)
+- **Node.js:** LTS через nvm (`~/.nvm`)
+
+### Деплой (основной способ)
+
+Запускать локально или на сервере из папки проекта:
 
 ```bash
-# Установка Node.js через nvm
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
-source ~/.bashrc
-nvm install --lts
-nvm use --lts
-
-# Установка PM2 (менеджер процессов)
-npm install -g pm2
+ssh root@155.212.131.33
+cd ~/hots_notify
+bash scripts/deploy.sh
 ```
 
-### Загрузка проекта
+Скрипт выполняет последовательно:
+1. `git fetch && git merge --ff-only origin/master` — обновление кода
+2. `npm install` — зависимости
+3. `npx prisma generate` — клиент Prisma
+4. `npx prisma migrate deploy` — миграции БД (prod)
+5. `npm test` — тесты (при падении деплой останавливается)
+6. `npm run build` — компиляция TypeScript → `dist/`
+7. `pm2 restart hots-notify` — перезапуск процесса
+
+### Первоначальная настройка (один раз)
 
 ```bash
-# Клонировать репозиторий или загрузить файлы через SFTP
-git clone <repo-url> /var/www/hots-notify
-cd /var/www/hots-notify
-
-# Создать .env с переменными (скопировать и заполнить)
-cp .env.example .env
-nano .env
-
-npm install
-npm run build
-```
-
-### Запуск через PM2
-
-```bash
+ssh root@155.212.131.33
+bash <(curl -s <repo-url>/scripts/vps-setup.sh) <git-repo-url>
+nano ~/hots_notify/.env          # заполнить токены
+cd ~/hots_notify
 pm2 start dist/index.js --name hots-notify
-pm2 save                        # Сохранить список процессов
-pm2 startup                     # Автозапуск после перезагрузки VPS
+pm2 save && pm2 startup
 ```
 
-### Управление
+### Управление PM2
 
 ```bash
-pm2 logs hots-notify            # Просмотр логов
-pm2 restart hots-notify         # Перезапуск
-pm2 stop hots-notify            # Остановка
-
-# Обновление бота
-git pull
-npm run build
-pm2 restart hots-notify
+pm2 logs hots-notify            # логи в реальном времени
+pm2 status hots-notify          # статус процесса
+pm2 restart hots-notify         # перезапуск без деплоя
+pm2 stop hots-notify            # остановка
 ```
+
+### БД и миграции
+
+- SQLite, файл: `~/hots_notify/prisma/dev.db` (prod использует тот же файл)
+- При добавлении поля в схему: добавить миграцию локально (`prisma migrate dev`), закоммитить, деплой применит её через `prisma migrate deploy`
+- Перед опасными миграциями сделать бэкап: `cp ~/hots_notify/prisma/dev.db ~/hots_notify/prisma/dev.db.bak`
+
+### Кастомные превью стримеров
+
+Файлы хранятся на сервере в `~/hots_notify/data/thumbnails/<login>.jpg`. Не попадают в git (добавить в `.gitignore` при необходимости).
 
 ## Notification Format (example)
 
