@@ -48,15 +48,11 @@ export function formatStreamMessage(
   profile?: StreamerProfile | null,
 ): string {
   const url = `https://twitch.tv/${stream.user_login}`;
-  const viewers = stream.viewer_count.toLocaleString('ru-RU');
-  const duration = formatDuration(stream.started_at);
 
   const lines = [
     `📺 <b>${escapeHtml(stream.title)}</b>`,
     `👤 ${escapeHtml(stream.user_name)}`,
     ``,
-    `⏱ В эфире: ${duration}`,
-    `👥 ${viewers} зрителей`,
     `🔗 ${url}`,
   ];
 
