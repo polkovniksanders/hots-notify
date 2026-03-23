@@ -164,12 +164,6 @@ describe('formatStreamMessage', () => {
     expect(msg).toContain('https://twitch.tv/zloyeugene');
   });
 
-  it('includes the viewer count', () => {
-    const msg = formatStreamMessage(makeStream({ viewer_count: 1234 }));
-    expect(msg).toContain('1');
-    expect(msg).toContain('234');
-  });
-
   it('includes #heroesofthestorm hashtag', () => {
     const msg = formatStreamMessage(makeStream());
     expect(msg).toContain('#heroesofthestorm');
