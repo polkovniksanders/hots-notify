@@ -28,7 +28,7 @@ on_error() {
   fi
 
   if command -v pm2 &> /dev/null && [ -d "$APP_DIR/dist" ]; then
-    pm2 startOrRestart "$APP_DIR/dist/index.js" --name hots-notify --update-env 2>/dev/null || true
+    { pm2 describe hots-notify > /dev/null 2>&1 && pm2 restart hots-notify --update-env || pm2 start "$APP_DIR/dist/index.js" --name hots-notify; } 2>/dev/null || true
     log_warn "PM2 restarted with previous build"
   fi
 
@@ -145,7 +145,9 @@ log_success "Dev dependencies removed"
 
 # 13. Restart PM2
 log_info "Restarting PM2..."
-pm2 startOrRestart "$APP_DIR/dist/index.js" --name hots-notify --update-env || on_error "pm2 restart"
+pm2 describe hots-notify > /dev/null 2>&1 \
+  && pm2 restart hots-notify --update-env \
+  || pm2 start "$APP_DIR/dist/index.js" --name hots-notify
 pm2 save
 log_success "PM2 restarted and saved"
 
