@@ -65,44 +65,51 @@ src/
 4. Для каждого нового стрима отправляем сообщение в `CHANNEL_ID`.
 5. Токен обновляем автоматически при истечении.
 
-## Deployment (Beget VPS)
+## Deployment (play2go.cloud)
 
 ### Сервер
 
-- **SSH:** `root@155.212.131.33`
+- **SSH:** `root@144.31.158.54`
 - **Путь проекта:** `$HOME/hots_notify` (т.е. `/root/hots_notify`)
 - **PM2 app name:** `hots-notify`
-- **OS:** Linux (Beget VPS)
-- **Node.js:** LTS через nvm (`~/.nvm`)
+- **OS:** Linux (Ubuntu/Debian)
+- **Node.js:** 22 LTS через NodeSource
 
 ### Деплой (основной способ)
 
-Запускать локально или на сервере из папки проекта:
-
 ```bash
-ssh root@155.212.131.33
+ssh root@144.31.158.54
 cd ~/hots_notify
 bash scripts/deploy.sh
 ```
 
 Скрипт выполняет последовательно:
-1. `git fetch && git merge --ff-only origin/master` — обновление кода
-2. `npm install` — зависимости
-3. `npx prisma generate` — клиент Prisma
-4. `npx prisma migrate deploy` — миграции БД (prod)
-5. `npm test` — тесты (при падении деплой останавливается)
-6. `npm run build` — компиляция TypeScript → `dist/`
-7. `pm2 restart hots-notify` — перезапуск процесса
+1. Pre-flight checks (Node.js >= 20, PM2, директория)
+2. `git reset --hard origin/master` — обновление кода
+3. Валидация `.env` и обязательных переменных
+4. Резервная копия `dist/` → `dist.backup`
+5. `npm ci` — зависимости (чистая установка)
+6. `npx prisma generate` — клиент Prisma
+7. `npx prisma migrate deploy` — миграции БД (prod)
+8. `tsc --noEmit` — проверка типов
+9. `npm test` — тесты (при падении деплой останавливается)
+10. `npm run build` — компиляция TypeScript → `dist/`
+11. `npm prune --omit=dev` — удаление dev-зависимостей
+12. `pm2 restart hots-notify` — перезапуск процесса
+13. Health check + вывод последних логов
+
+При ошибке на любом шаге: откат `dist.backup` → перезапуск PM2 с предыдущим билдом.
 
 ### Первоначальная настройка (один раз)
 
 ```bash
-ssh root@155.212.131.33
-bash <(curl -s <repo-url>/scripts/vps-setup.sh) <git-repo-url>
-nano ~/hots_notify/.env          # заполнить токены
+ssh root@144.31.158.54
+git clone <repo-url> ~/hots_notify
 cd ~/hots_notify
-pm2 start dist/index.js --name hots-notify
-pm2 save && pm2 startup
+bash scripts/vps-setup.sh       # устанавливает Node.js, PM2, systemd autostart
+nano .env                        # заполнить токены
+bash scripts/deploy.sh           # первый деплой
+pm2 start dist/index.js --name hots-notify && pm2 save
 ```
 
 ### Управление PM2
